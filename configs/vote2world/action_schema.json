@@ -1,0 +1,109 @@
+{
+  "dataset_name": "fractal20220817_data",
+  "schema_status": "provisional",
+  "schema_version": 1,
+  "action_dim": 13,
+  "flatten_key_order": [
+    "gripper_closedness_action",
+    "terminate_episode",
+    "base_displacement_vector",
+    "rotation_delta",
+    "base_displacement_vertical_rotation",
+    "world_vector"
+  ],
+  "field_slices": {
+    "gripper_closedness_action": {
+      "start": 0,
+      "end": 1,
+      "dim": 1,
+      "dtype": "float32",
+      "semantic_group": "gripper",
+      "include_in_model_input": true,
+      "include_in_motion_magnitude": false
+    },
+    "terminate_episode": {
+      "start": 1,
+      "end": 4,
+      "dim": 3,
+      "dtype": "int32",
+      "semantic_group": "mode",
+      "include_in_model_input": true,
+      "include_in_motion_magnitude": false
+    },
+    "base_displacement_vector": {
+      "start": 4,
+      "end": 6,
+      "dim": 2,
+      "dtype": "float32",
+      "semantic_group": "base",
+      "include_in_model_input": true,
+      "include_in_motion_magnitude": false
+    },
+    "rotation_delta": {
+      "start": 6,
+      "end": 9,
+      "dim": 3,
+      "dtype": "float32",
+      "semantic_group": "rotation",
+      "include_in_model_input": true,
+      "include_in_motion_magnitude": true
+    },
+    "base_displacement_vertical_rotation": {
+      "start": 9,
+      "end": 10,
+      "dim": 1,
+      "dtype": "float32",
+      "semantic_group": "base",
+      "include_in_model_input": true,
+      "include_in_motion_magnitude": false
+    },
+    "world_vector": {
+      "start": 10,
+      "end": 13,
+      "dim": 3,
+      "dtype": "float32",
+      "semantic_group": "translation",
+      "include_in_model_input": true,
+      "include_in_motion_magnitude": true
+    }
+  },
+  "semantic_groups": {
+    "arm_translation": [
+      "world_vector"
+    ],
+    "arm_rotation": [
+      "rotation_delta"
+    ],
+    "gripper": [
+      "gripper_closedness_action"
+    ],
+    "base": [
+      "base_displacement_vector",
+      "base_displacement_vertical_rotation"
+    ],
+    "mode": [
+      "terminate_episode"
+    ]
+  },
+  "official_single_step": {
+    "context_length": 4,
+    "segment_length": 5,
+    "action_bins": 256,
+    "visual_token_num": 4375,
+    "tokens_per_frame": 320,
+    "bos_token_id": 4631,
+    "eos_token_id": 4632,
+    "gen_input_length": 1333,
+    "gen_output_length": 321
+  },
+  "evidence": {
+    "status_reason": "Based on parsed TFDS features.json and TFRecord sample; official oxe_data_converter.py has not yet been run with TFDS in this environment.",
+    "sources": [
+      "reports/rt1_input_audit/rt1_action_schema.md",
+      "reports/rt1_input_audit/rt1_tfrecord_audit.json",
+      "third_party/RLVR-World/vid_wm/oxe_data_converter.py",
+      "third_party/RLVR-World/vid_wm/ivideogpt/ivideogpt/processor.py"
+    ],
+    "generated_at": "2026-06-10"
+  }
+}
