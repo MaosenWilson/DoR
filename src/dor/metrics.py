@@ -6,11 +6,14 @@ import torch
 class Metrics:
     """Perceptual / pixel metrics against the ground-truth next frame."""
 
-    def __init__(self, device):
+    def __init__(self, device, lpips_net="vgg"):
         import lpips as lpips_lib
 
+        # lpips_net="vgg" matches RLVR-World's reward/eval LPIPS backbone (faithful A0
+        # baseline). The earlier code used "alex"; vgg is heavier but comparable to the
+        # published numbers.
         self.device = device
-        self.lpips = lpips_lib.LPIPS(net="alex").to(device).eval()
+        self.lpips = lpips_lib.LPIPS(net=lpips_net).to(device).eval()
         for p in self.lpips.parameters():
             p.requires_grad_(False)
         self._ssim = None

@@ -16,12 +16,47 @@ The reward r_gt is never modified, so the verifiable objective is preserved.
 """
 import numpy as np
 
-MODES = ("gt_only", "hybrid_add", "hybrid_mult")
+MODES = ("gt_only", "hybrid_add", "hybrid_mult", "drgrpo", "rankrel")
 
 
 def _zscore(x, eps=1e-6):
     x = np.asarray(x, dtype=np.float64)
     return (x - x.mean()) / (x.std() + eps)
+
+
+def rank_reliability_weights(r, sigma_eta, eps=1e-12):
+    """Candidate-level confidence that local reward ranks survive floor noise.
+
+    For two candidates with observed reward gap |r_i-r_j| and independent Gaussian
+    reward noise of std sigma_eta per candidate, the confidence that their ordering is
+    not a coin flip is
+
+        2*Phi(|gap|/(sqrt(2)*sigma_eta)) - 1 = erf(|gap|/(2*sigma_eta)).
+
+    We assign each candidate the confidence of its nearest sorted neighbour, i.e. the
+    weakest adjacent ordering that can flip its local rank. K is tiny (16), but this
+    adjacent version avoids over-penalising top/bottom samples for far-away pairs.
+    """
+    r = np.asarray(r, dtype=np.float64)
+    if r.size <= 1 or sigma_eta is None or sigma_eta <= eps:
+        return np.ones_like(r, dtype=np.float64)
+
+    order = np.argsort(r)
+    rs = r[order]
+    gaps = np.full(r.size, np.inf, dtype=np.float64)
+    if r.size > 1:
+        left = np.r_[np.inf, np.abs(np.diff(rs))]
+        right = np.r_[np.abs(np.diff(rs)), np.inf]
+        gaps_sorted = np.minimum(left, right)
+        gaps[order] = gaps_sorted
+
+    # Vectorised erf via numpy if available; fallback keeps the code portable.
+    try:
+        conf = np.erf(gaps / (2.0 * float(sigma_eta)))
+    except AttributeError:
+        import math
+        conf = np.array([math.erf(float(g) / (2.0 * float(sigma_eta))) for g in gaps])
+    return np.clip(conf, 0.0, 1.0)
 
 
 def static_copy_gate(motion, copy_sim, tau_motion=0.5, tau_copy=0.10):
@@ -49,10 +84,15 @@ def shape_advantage(r_gt, consensus=None, mode="gt_only", *, lam=0.5, beta=0.5,
       (advantage [K] np.float64, info dict).
     """
     r_gt = np.asarray(r_gt, float)
+    if mode == "drgrpo":
+        # Dr.GRPO: subtract group mean only, NO /std. Floor-dominated groups (whose std is
+        # noise) are then not amplified to unit variance. (advisor_meeting_20260627.md §6-补3)
+        adv = r_gt - r_gt.mean()
+        return adv, {"adv": adv}
     zr = _zscore(r_gt)
     info = {"zr": zr}
 
-    if mode == "gt_only":
+    if mode in ("gt_only", "rankrel"):
         shaped = zr
     elif mode in ("hybrid_add", "hybrid_mult"):
         if consensus is None:

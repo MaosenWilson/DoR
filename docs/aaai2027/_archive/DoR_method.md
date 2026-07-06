@@ -1,6 +1,7 @@
-# DoR 方法稿 — *Dynamics over Reconstruction*
+# 方法稿（旧版，已被 docs/aaai2027/method.md 取代）
 
-**论文标题**：*Dynamics over Reconstruction: Calibrating Verifiable Rewards for Video World Models.*
+**论文标题**：*Mind the Reconstruction Floor: Calibrating Verifiable Rewards for Tokenized Video World Models.*
+（旧标题 *Dynamics over Reconstruction* 已弃用：经 V1–V6，故事重心从"动态优先"改为"奖励噪声地板 + 在哪个空间/对齐哪个目标算"。以 `docs/aaai2027/method.md` 为准。）
 
 > **定位更新（2026-06-15）**：诊断证明像素 LPIPS 可验证奖励被 tokenizer 重建噪声主导（帧间运动 0.040 <
 > 重建地板 0.053），RL 实际在优化纹理而非动态。**DoR 主线 = 动态对齐 / 地板校准的可验证奖励**；下文的

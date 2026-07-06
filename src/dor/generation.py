@@ -5,8 +5,13 @@ from dor.constants import EOS, TPF, VTOK
 
 
 @torch.no_grad()
-def generate_candidates(model, prompt, K, temperature=1.0, top_k=2000, seed=0):
-    """prompt [PROMPT_LEN] -> candidate visual tokens [K, TPF] long."""
+def generate_candidates(model, prompt, K, temperature=1.0, top_k=100, seed=0):
+    """prompt [PROMPT_LEN] -> candidate visual tokens [K, TPF] long.
+
+    top_k=100 aligns with the RLVR-World official eval default
+    (eval_vgpt.py: --topk default 100, temperature 1.0, ignore_eos) so the
+    generator stays comparable to the RLVR-World baseline.
+    """
     torch.manual_seed(seed)
     out = model.generate(
         input_ids=prompt.unsqueeze(0),

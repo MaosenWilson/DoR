@@ -23,6 +23,22 @@ def encode_features(tok, frames):
 
 
 @torch.no_grad()
+def encode_feature_map(tok, frames):
+    """Continuous pre-quant feature MAP (frozen encoder phi), spatial kept.
+    frames [N,3,256,320] in [0,1] -> [N, C'*h*w] float32 (flattened, NO GAP).
+
+    Matches code_rms's full-spatial granularity so the phi arm (A5) and the code
+    arm (A6) live in the same space and isolate exactly the quantization step
+    (A5 vs A6). The GAP-pooled `encode_features` above is only for the consensus
+    global descriptor and must NOT be used as the phi reward (it discards the
+    spatial structure that distinguishes candidates)."""
+    with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+        d = tok.encoder(frames)        # [N,C,h,w]
+        d = tok.quant_linear(d)        # [N,C',h,w]
+    return d.float().reshape(frames.shape[0], -1)  # [N, C'*h*w]
+
+
+@torch.no_grad()
 def decode_tokens(tok, vis_tokens):
     """vis_tokens [N,320] long -> images [N,3,256,320] in [0,1]."""
     idx = vis_tokens.clamp(0, VTOK - 1).long().reshape(-1, 1, GRID[0], GRID[1])
