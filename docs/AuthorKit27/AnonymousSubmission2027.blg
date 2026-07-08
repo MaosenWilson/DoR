@@ -1,0 +1,57 @@
+This is BibTeX, Version 0.99e (TeX Live 2026)
+Capacity: max_strings=200000, hash_size=200000, hash_prime=170003
+The top-level auxiliary file: AnonymousSubmission2027.aux
+The style file: aaai2027.bst
+Database file #1: aaai2027.bib
+Warning--I didn't find a database entry for "em:86"
+Warning--I didn't find a database entry for "r:80"
+Warning--I didn't find a database entry for "hcr:83"
+Warning--I didn't find a database entry for "c:84"
+Warning--I didn't find a database entry for "c:83"
+Warning--I didn't find a database entry for "r:86"
+Warning--I didn't find a database entry for "c:79"
+Warning--I didn't find a database entry for "c:21"
+Warning--I didn't find a database entry for "c:22"
+Warning--I didn't find a database entry for "c:23"
+You've used 33 entries,
+            2840 wiz_defined-function locations,
+            741 strings with 11045 characters,
+and the built_in function-call counts, 25780 in all, are:
+= -- 1831
+> -- 2001
+< -- 0
++ -- 741
+- -- 705
+* -- 2047
+:= -- 4411
+add.period$ -- 132
+call.type$ -- 33
+change.case$ -- 376
+chr.to.int$ -- 34
+cite$ -- 33
+duplicate$ -- 1554
+empty$ -- 1373
+format.name$ -- 803
+if$ -- 4784
+int.to.chr$ -- 1
+int.to.str$ -- 1
+missing$ -- 371
+newline$ -- 169
+num.names$ -- 132
+pop$ -- 898
+preamble$ -- 1
+purify$ -- 344
+quote$ -- 0
+skip$ -- 732
+stack$ -- 0
+substring$ -- 599
+swap$ -- 824
+text.length$ -- 0
+text.prefix$ -- 0
+top$ -- 0
+type$ -- 297
+warning$ -- 0
+while$ -- 148
+width$ -- 0
+write$ -- 405
+(There were 10 warnings)

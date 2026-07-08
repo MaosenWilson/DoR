@@ -90,39 +90,9 @@
 % nouns, adverbs, adjectives should be capitalized, including both words in hyphenated terms, while
 % articles, conjunctions, and prepositions are lower case unless they
 % directly follow a colon or long dash
-\title{AAAI Press Anonymous Submission\\Instructions for Authors Using \LaTeX{}}
-\author{
-    %Authors
-    % All authors must be in the same font size and format.
-    Written by AAAI Press Staff\textsuperscript{\rm 1}\thanks{With help from the AAAI Publications Committee.}\\
-    AAAI Style Contributions by Peter Patel Schneider,
-    Sunil Issar,\\
-    J. Scott Penberthy,
-    George Ferguson,
-    Hans Guesgen,
-    Francisco Cruz\equalcontrib\corresponding,
-    Marc Pujol-Gonzalez\equalcontrib\corresponding
-}
-\affiliations{
-    %Afiliations
-    \textsuperscript{\rm 1}Association for the Advancement of Artificial Intelligence\\
-    % If you have multiple authors and multiple affiliations
-    % use superscripts in text and roman font to identify them.
-    % For example,
-
-    % Sunil Issar\textsuperscript{\rm 2},
-    % J. Scott Penberthy\textsuperscript{\rm 3},
-    % George Ferguson\textsuperscript{\rm 4}\corresponding,
-    % Hans Guesgen\textsuperscript{\rm 5}
-    % Note that the comma should be placed after the superscript
-
-    1101 Pennsylvania Ave, NW Suite 300\\
-    Washington, DC 20004 USA\\
-    % email address must be in roman text type, not monospace or sans serif
-    proceedings-questions@aaai.org
-%
-% See more examples next
-}
+\title{RC-GRPO: Reconstruction-Calibrated Temporal Credit Assignment for Tokenized Video World Models}
+\author{Anonymous Submission}
+\affiliations{}
 
 %Example, Single Author, ->> remove \iffalse,\fi and place them surrounding AAAI title to use it
 \iffalse
@@ -160,7 +130,7 @@
 \maketitle
 
 \begin{abstract}
-AAAI creates proceedings, working notes, and technical reports directly from electronic source furnished by the authors. To ensure that all papers in the publication have a uniform appearance, authors must adhere to the following instructions.
+% Abstract will be written after the main sections are fixed.
 \end{abstract}
 
 % Uncomment the following to link to your code, datasets, an extended version or similar.
@@ -172,45 +142,33 @@ AAAI creates proceedings, working notes, and technical reports directly from ele
 %     \link{Extended version}{https://aaai.org/example/extended-version}
 % \end{links}
 
-\section{Preparing an Anonymous Submission}
+\section{Introduction}
 
-This document details the formatting requirements for anonymous submissions. The requirements are the same as for camera ready papers but with a few notable differences:
+Video world models predict future visual observations conditioned on past frames and actions, providing sampleable environment models for robotics, interactive simulation, and model-based reinforcement learning \citep{worldmodels,rssm,dreamerv3,dws}. A common implementation tokenizes visual observations and casts action-conditioned video prediction as sequence modeling: frames are encoded into discrete visual tokens, an autoregressive model predicts future tokens, and a decoder maps generated tokens back to images \citep{videogpt,magvit,ivideogpt,fsq}. Recent verifiable reward frameworks further suggest that these models can be improved after pre-training by sampling a group of candidate futures, scoring decoded predictions against ground-truth frames, and applying GRPO to reinforce candidates with higher within-group rewards \citep{rlvrworld,grpo}. This pipeline is attractive because it optimizes against measurable prediction errors rather than a learned critic.
 
-\begin{itemize}
-    \item Anonymous submissions must not include the author names and affiliations. Write ``Anonymous Submission'' as the ``sole author'' and leave the affiliations empty.
-    \item The PDF document's metadata should be cleared with a metadata-cleaning tool before submitting it. This is to prevent leaked information from revealing your identity.
-    \item References must be anonymized whenever the reader can infer that they are to the authors' previous work.
-    \item AAAI's copyright notice should not be included as a footer in the first page.
-    \item You do not need to provide any copyright transfer form at this stage.
-    \item Depending on the conference, you may be required to include a reproducibility checklist or prepare it separately. Check the conference's instructions in their website.
-    \item Similarly, depending on the conference you may be allowed to submit a supplementary technical appendix after the references, or you may be allowed to submit it as a separate document, or you may not be allowed to submit a technical appendix at all.
-\end{itemize}
+This paper studies a narrower but important question: when the world model is tokenized, is the decoded full-reference reward the right signal for GRPO, especially in multi-step rollouts? We find two coupled failure modes. First, post-decode verifiers compare candidates with raw ground truth even though the ground truth is not exactly reachable through the tokenizer-decoder pair. Second, multi-step GRPO often collapses a rollout into one sequence-level advantage, even though video prediction is autoregressive and frame errors propagate across horizons. These failures are easy to miss because the training loop remains verifiable: every candidate is still compared with a known target.
 
-You can remove the copyright notice and ensure that your names aren't shown by including \texttt{submission} option when loading the \texttt{aaai2027} package:
+The first failure mode is verifier-side. A lossy visual tokenizer imposes an irreducible encode-decode residual on the ground-truth frame. We call this residual the reconstruction floor. It is not caused by any sampled candidate, but post-decode metrics such as MSE, SSIM, and LPIPS still include it when scoring decoded predictions \citep{ssim,lpips}. For ordinary evaluation, this is a reconstruction-quality limit of the tokenizer \citep{vqvae,vqgan,perceptiondistortion}. For GRPO, it is a ranking problem: the update depends on relative rewards within a sample group, so reconstruction-induced noise can change which candidate receives positive advantage.
 
-\begin{quote}\begin{scriptsize}\begin{verbatim}
-\documentclass[letterpaper]{article}
-\usepackage[submission]{aaai2027}
-\end{verbatim}\end{scriptsize}\end{quote}
+The second failure mode is temporal. In a multi-step video rollout, early generated frames become the context for later predictions. A late error can therefore reflect earlier choices, later choices, or their interaction. Sequence-level GRPO ignores this structure by assigning the same normalized advantage to all generated tokens in the rollout. Fine-grained credit assignment has been explored for GRPO-style training in language reasoning and generative trajectories \citep{grpolambda,spo,sdgrpo,stepwiseflowgrpo,dapo}, but tokenized video has a different natural unit of credit: a future frame is represented by a block of visual tokens and evaluated by a frame-level verifier.
 
-The remainder of this document contains the original camera-ready instructions. Any contradiction of the above points ought to be ignored while preparing anonymous submissions.
+We propose \emph{RC-GRPO}, a reconstruction-calibrated temporal credit assignment method for tokenized video world models. RC-GRPO keeps the sample-group, verifiable-reward, and group-relative update structure intact, but changes the target and the credit unit. For verifier calibration, it replaces the raw ground-truth frame with the tokenizer-reachable target $\tilde{s}_t = D(E(s_t))$, so decoded predictions are compared in the same reachable image space. For temporal credit assignment, it computes frame-level rewards in multi-step rollouts and forms temporal-return advantages for each future-frame token block. Early tokens can then receive credit through later frame quality, while horizon-specific prediction errors are no longer mixed into a single scalar advantage.
 
-\section{Camera-Ready Guidelines}
+Our contributions are threefold. First, we identify a reconstruction-floor failure mode in tokenized video GRPO and verify that the resulting pairwise rank flips follow the predicted $\arccos(\rho)/\pi$ relationship across several reward spaces. Second, we introduce reconstruction-calibrated verifiers as the reward substrate for both single-step and multi-step training. Third, we introduce temporal-return GRPO for multi-step video rollouts and show, under a fixed held-out protocol on RT-1 prediction, that it improves full-reference fidelity over sequence-level GRPO, with gains increasing toward later horizons. We also report negative auxiliary results for generic GRPO replacements, which supports the conclusion that the effective intervention point is video-structured calibration and temporal credit rather than a generic optimizer swap.
 
-Congratulations on having a paper selected for inclusion in an AAAI Press proceedings or technical report! This document details the requirements necessary to get your accepted paper published using PDF\LaTeX{}. If you are using Microsoft Word, instructions are provided in a different document. AAAI Press does not support any other formatting software.
+\section{Related Work}
 
-The instructions herein are provided as a general guide for experienced \LaTeX{} users. If you do not know how to use \LaTeX{}, please obtain assistance locally. AAAI cannot provide you with support and the accompanying style files are \textbf{not} guaranteed to work. If the results you obtain are not in accordance with the specifications you received, you must correct your source file to achieve the correct result.
+\paragraph{Tokenized video world models.}
+World models learn predictive environment dynamics that can support planning, control, and simulation from visual observations \citep{worldmodels,rssm,dreamerv2,dreamerv3}. Recent video generative models extend this idea by modeling future visual observations directly, often through tokenized sequence modeling. VideoGPT, MAGVIT, iVideoGPT, Genie, and pre-trained video simulators show that discrete visual tokens and autoregressive or masked sequence models can support scalable video prediction and interactive generation \citep{videogpt,magvit,ivideogpt,genie,dws}. These works mainly study how to build or pre-train a sampleable video world model. Our focus is different: given a tokenized video world model and a verifiable post-training loop, we study whether the decoded verifier target and the sequence-level GRPO update match the structure of tokenized multi-step video prediction.
 
-These instructions are generic. Consequently, they do not include specific dates, page charges, and so forth. Please consult your specific written conference instructions for details regarding your submission. Please review the entire document for specific instructions that might apply to your particular situation. All authors must comply with the following:
+\paragraph{Verifiable reward post-training.}
+Verifiable reward training samples multiple candidate outputs for the same context, scores them with an externally computable reward, and applies group-relative policy updates without a learned value function. RLVR-World instantiates this idea for world models, while GRPO and related RLVR-style methods have been widely explored in language reasoning and post-training \citep{rlvrworld,grpo,deepseekr1}. Recent variants analyze length bias, clipping behavior, large-scale optimization, classification-style rank labels, and adaptive policy objectives \citep{drgrpo,dapo,gspo,realrlvr,sapo}. We do not treat these optimizer variants as direct solutions to tokenized video post-training. In our setting, the verifier itself can corrupt within-group rankings because decoded candidates are compared with targets that are not exactly reachable through the tokenizer-decoder pair. This shifts the relevant intervention from a generic optimizer swap to video-structured verifier calibration.
 
-\begin{itemize}
-\item You must use the 2027 AAAI Press \LaTeX{} style file and the aaai2027.bst bibliography style files, which are located in the 2027 AAAI Author Kit (aaai2027.sty, aaai2027.bst).
-\item You must complete, sign, and return by the deadline the AAAI copyright form (unless directed by AAAI Press to use the AAAI Distribution License instead).
-\item You must read and format your paper source and PDF according to the formatting instructions for authors.
-\item You must submit your electronic files and abstract using our electronic submission form \textbf{on time.}
-\item You must pay any required page or formatting charges to AAAI Press so that they are received by the deadline.
-\item You must check your paper before submitting it, ensuring that it compiles without error, and complies with the guidelines found in the AAAI Author Kit.
-\end{itemize}
+\paragraph{Visual tokenizers and evaluation metrics.}
+Discrete visual representation learning compresses images or videos into token sequences that can be modeled by transformers, but lossy tokenization introduces an encode-decode reconstruction limit \citep{vqvae,vqgan,fsq}. This limit is closely related to the broader perception-distortion tradeoff in image reconstruction \citep{perceptiondistortion}. Full-reference metrics such as SSIM and LPIPS are commonly used to evaluate per-sample fidelity, whereas FID, KID, FVD, DINO-based distances, precision/recall, and density/coverage evaluate distribution-level fidelity and diversity \citep{ssim,lpips,fid,kid,fvd,dinov2,precisionrecall,densitycoverage}. These metrics are usually used for reporting generation quality. We instead ask what happens when a post-decode full-reference metric becomes the reward consumed by GRPO: distribution-level metrics do not directly provide a per-candidate verifier, while post-decode per-sample metrics inherit the tokenizer reconstruction floor and can alter candidate rankings.
+
+\paragraph{Fine-grained credit assignment.}
+Sequence-level advantages can be too coarse when a generation trajectory contains multiple reasoning steps, semantic segments, or generation stages. Recent GRPO-style work addresses this issue through eligibility-trace credit assignment, segment-level policy optimization, verifiable segment decomposition, stepwise credit for flow-matching generation, and token-level loss shaping in large-scale RL systems \citep{grpolambda,spo,sdgrpo,stepwiseflowgrpo,dapo}. RC-GRPO adapts this principle to tokenized video rather than reusing token-level or denoising-step credit directly. In a video rollout, the natural credit unit is a future-frame block of visual tokens, and each block is scored by a frame-level full-reference verifier. This motivates temporal-return advantages over frame blocks after reconstruction-calibrated verifier targets, rather than a task-agnostic GRPO objective.
 
 \section{Copyright}
 All papers submitted for publication by AAAI Press must be accompanied by a valid signed copyright form. They must also contain the AAAI copyright notice at the bottom of the first page of the paper. There are no exceptions to these requirements. If you fail to provide us with a signed copyright form or disable the copyright notice, we will be unable to publish your paper. There are \textbf{no exceptions} to this policy. You will find a PDF version of the AAAI copyright form in the AAAI AuthorKit. Please see the specific instructions for your conference for submission details.

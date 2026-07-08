@@ -233,6 +233,31 @@ $$
 
 其中 $\beta$ 是 temporal discount。return 模式允许早期生成 token 因后续 rollout 好坏获得 credit，更适合自回归视频世界模型。
 
+**temporal-gain return advantage**：
+
+视频 rollout 的另一个风险是误差沿 horizon 继续放大。借鉴 stepwise/gain credit assignment 的思想，我们测试一个只作为 opt-in 候选的 gain shaping：
+
+$$
+g_{i,t}=r_{i,t}-r_{i,t-1},
+\qquad
+\tilde r_{i,t}=r_{i,t}+\alpha_{\mathrm{gain}}g_{i,t}.
+$$
+
+随后对 $\tilde r$ 做 temporal return：
+
+$$
+G^{\mathrm{gain}}_{i,t}
+=
+\sum_{u=\max(t,2)}^{F}
+\beta^{u-t}\tilde r_{i,u},
+\qquad
+A_{i,t}^{\mathrm{gain}}
+=
+\frac{G^{\mathrm{gain}}_{i,t}-\mu_t}{\sigma_t+\epsilon}.
+$$
+
+实现约定：第一个 future frame 没有直接 action-conditioned reward，仍置零；gain 从第二个有直接 reward 的 frame 开始计算，避免把人工零 reward 当作真实评价。若 `gain_return` 不优于 `return`，它作为负消融归档，不进入主方法。
+
 ### 3.4 Temporal GRPO Objective
 
 Temporal GRPO loss：
@@ -251,6 +276,7 @@ $$
 当 `adv_temporal=seq` 时，退化为旧 multi-step GRPO。  
 当 `adv_temporal=frame` 时，每个 frame 独立归一化。  
 当 `adv_temporal=return` 时，用后续 reward 的折扣回报做 frame-block credit assignment。
+当 `adv_temporal=gain_return` 时，先用相邻帧 reward improvement 做 video-specific shaping，再计算 temporal return。
 
 ### 3.5 Horizon-Aware KL
 
@@ -326,6 +352,9 @@ python scripts/train_grpo_msp.py \
 # proposed
 --adv_temporal return --rewards rc --seeds 0,1,2
 
+# candidate extension
+--adv_temporal gain_return --gain_alpha 0.5 --rewards rc --seeds 0,1,2
+
 # ablation
 --adv_temporal frame --rewards rc --seeds 0,1,2
 ```
@@ -335,4 +364,5 @@ python scripts/train_grpo_msp.py \
 - final LPIPS / LPIPS-last 不发散；
 - final 优于 official multi-step RLVR held-out baseline；
 - `return > seq`；
+- `gain_return >= return` 才能升级为主方法，否则只作负消融；
 - `rc + return > raw + return`，证明 verifier calibration 与 temporal credit assignment 互补。

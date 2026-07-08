@@ -58,7 +58,35 @@ def eval_msp(model, tok, ar, metrics, wins, T, K, dev, seed=999):
             "mse": float(np.mean(mse_mean))}
 
 
-def _temporal_advantages(r_frame, mode, beta):
+def _discounted_frame_advantage(r_frame, beta):
+    ret = np.zeros_like(r_frame)
+    running = np.zeros(r_frame.shape[0], dtype=np.float64)
+    for t in range(r_frame.shape[1] - 1, -1, -1):
+        running = r_frame[:, t] + beta * running
+        ret[:, t] = running
+    adv = np.zeros_like(ret)
+    for t in range(ret.shape[1]):
+        x = ret[:, t]
+        adv[:, t] = (x - x.mean()) / (x.std() + 1e-6)
+    return adv
+
+
+def _gain_shaped_rewards(r_frame, alpha):
+    """Video-specific gain shaping: reward frames that improve over the previous frame.
+
+    r_frame[:,0] is the artificial no-direct-reward future frame in the MSP convention,
+    so gain starts at t=2 (0-indexed) to avoid treating that zero as a real score.
+    """
+    shaped = np.array(r_frame, dtype=np.float64, copy=True)
+    if alpha == 0.0 or shaped.shape[1] <= 2:
+        return shaped
+    gain = np.zeros_like(shaped)
+    gain[:, 2:] = shaped[:, 2:] - shaped[:, 1:-1]
+    shaped[:, 1:] = shaped[:, 1:] + alpha * gain[:, 1:]
+    return shaped
+
+
+def _temporal_advantages(r_frame, mode, beta, gain_alpha=0.0):
     """Build sequence or frame-block advantages from per-frame rewards.
 
     r_frame [K,F] follows the MSP convention: frame 0 has no direct reward and is zero.
@@ -81,16 +109,11 @@ def _temporal_advantages(r_frame, mode, beta):
         return None, adv, float(scalar.mean())
 
     if mode == "return":
-        ret = np.zeros_like(r)
-        running = np.zeros(r.shape[0], dtype=np.float64)
-        for t in range(r.shape[1] - 1, -1, -1):
-            running = r[:, t] + beta * running
-            ret[:, t] = running
-        adv = np.zeros_like(ret)
-        for t in range(ret.shape[1]):
-            x = ret[:, t]
-            adv[:, t] = (x - x.mean()) / (x.std() + 1e-6)
-        return None, adv, float(scalar.mean())
+        return None, _discounted_frame_advantage(r, beta), float(scalar.mean())
+
+    if mode == "gain_return":
+        shaped = _gain_shaped_rewards(r, gain_alpha)
+        return None, _discounted_frame_advantage(shaped, beta), float(scalar.mean())
 
     raise ValueError(f"unknown adv_temporal={mode!r}")
 
@@ -161,7 +184,7 @@ def train_one(reward, seed, args, dev="cuda"):
                 target_f = detok_chunked(tok, idx_c, idx_d_gt)[0] if reward == "rc" else real_f
                 r_frame = msp_rewards_frame(pred, real_f, target_f, metrics, kind=reward)
                 adv, adv_frame, r_mean = _temporal_advantages(
-                    r_frame, args.adv_temporal, args.temporal_gamma)
+                    r_frame, args.adv_temporal, args.temporal_gamma, args.gain_alpha)
             model.config.use_cache = False
             tok_logp = msp_token_logp(model, ctx_off, act_off, dyn)
             model.config.use_cache = True
@@ -211,11 +234,14 @@ def main():
     ap.add_argument("--kl", type=float, default=0.001,
                     help="KL coef to the frozen base policy (official multi-step recipe "
                          "uses 0.001; 0 disables and reproduces the diverging v1/v2 setup)")
-    ap.add_argument("--adv_temporal", default="seq", choices=["seq", "frame", "return"],
+    ap.add_argument("--adv_temporal", default="seq",
+                    choices=["seq", "frame", "return", "gain_return"],
                     help="multi-step advantage granularity: old rollout scalar, per-frame, "
-                         "or discounted temporal return")
+                         "discounted temporal return, or gain-shaped temporal return")
     ap.add_argument("--temporal_gamma", type=float, default=0.95,
-                    help="discount beta for --adv_temporal return")
+                    help="discount beta for --adv_temporal return/gain_return")
+    ap.add_argument("--gain_alpha", type=float, default=0.5,
+                    help="reward-improvement shaping strength for --adv_temporal gain_return")
     ap.add_argument("--horizon_kl_alpha", type=float, default=0.0,
                     help="0 = uniform KL; >0 linearly strengthens KL on later rollout frames")
     ap.add_argument("--eval_every", type=int, default=10)

@@ -1,0 +1,222 @@
+\begin{thebibliography}{33}
+\providecommand{\natexlab}[1]{#1}
+
+\bibitem[{Bi{\'n}kowski et~al.(2018)Bi{\'n}kowski, Sutherland, Arbel, and
+  Gretton}]{kid}
+Bi{\'n}kowski, M.; Sutherland, D.~J.; Arbel, M.; and Gretton, A. 2018.
+\newblock Demystifying {MMD GANs}.
+\newblock In \emph{International Conference on Learning Representations
+  (ICLR)}.
+
+\bibitem[{Blau and Michaeli(2018)}]{perceptiondistortion}
+Blau, Y.; and Michaeli, T. 2018.
+\newblock The Perception-Distortion Tradeoff.
+\newblock In \emph{IEEE/CVF Conference on Computer Vision and Pattern
+  Recognition (CVPR)}, 6228--6237.
+
+\bibitem[{Bruce et~al.(2024)Bruce, Dennis, Edwards, Parker-Holder, Shi, Hughes,
+  Lai, Mavalankar, Steigerwald, Apps et~al.}]{genie}
+Bruce, J.; Dennis, M.~D.; Edwards, A.; Parker-Holder, J.; Shi, Y.; Hughes, E.;
+  Lai, M.; Mavalankar, A.; Steigerwald, R.; Apps, C.; et~al. 2024.
+\newblock Genie: Generative Interactive Environments.
+\newblock In \emph{International Conference on Machine Learning (ICML)}.
+
+\bibitem[{{DeepSeek-AI} et~al.(2025){DeepSeek-AI}, Guo, Yang, Zhang, Song,
+  Wang, Zhu, Xu et~al.}]{deepseekr1}
+{DeepSeek-AI}; Guo, D.; Yang, D.; Zhang, H.; Song, J.; Wang, P.; Zhu, Q.; Xu,
+  R.; et~al. 2025.
+\newblock {DeepSeek-R1}: Incentivizing Reasoning Capability in {LLMs} via
+  Reinforcement Learning.
+\newblock arXiv:2501.12948.
+
+\bibitem[{Esser, Rombach, and Ommer(2021)}]{vqgan}
+Esser, P.; Rombach, R.; and Ommer, B. 2021.
+\newblock Taming Transformers for High-Resolution Image Synthesis.
+\newblock In \emph{IEEE/CVF Conference on Computer Vision and Pattern
+  Recognition (CVPR)}, 12873--12883.
+
+\bibitem[{Gao et~al.(2025)Gao, Zheng, Chen, Dang, Liu, Yu, Yang, Bai, Zhou, and
+  Lin}]{sapo}
+Gao, C.; Zheng, C.; Chen, X.-H.; Dang, K.; Liu, S.; Yu, B.; Yang, A.; Bai, S.;
+  Zhou, J.; and Lin, J. 2025.
+\newblock Soft Adaptive Policy Optimization.
+\newblock arXiv:2511.20347.
+
+\bibitem[{Guo et~al.(2025)Guo, Xu, Liu, Ye, and Qiu}]{spo}
+Guo, Y.; Xu, L.; Liu, J.; Ye, D.; and Qiu, S. 2025.
+\newblock Segment Policy Optimization: Effective Segment-Level Credit
+  Assignment in {RL} for Large Language Models.
+\newblock arXiv:2505.23564.
+
+\bibitem[{Ha and Schmidhuber(2018)}]{worldmodels}
+Ha, D.; and Schmidhuber, J. 2018.
+\newblock World Models.
+\newblock arXiv:1803.10122.
+
+\bibitem[{Hafner et~al.(2019)Hafner, Lillicrap, Fischer, Villegas, Ha, Lee, and
+  Davidson}]{rssm}
+Hafner, D.; Lillicrap, T.; Fischer, I.; Villegas, R.; Ha, D.; Lee, H.; and
+  Davidson, J. 2019.
+\newblock Learning Latent Dynamics for Planning from Pixels.
+\newblock In \emph{International Conference on Machine Learning (ICML)},
+  2555--2565.
+
+\bibitem[{Hafner et~al.(2021)Hafner, Lillicrap, Norouzi, and Ba}]{dreamerv2}
+Hafner, D.; Lillicrap, T.; Norouzi, M.; and Ba, J. 2021.
+\newblock Mastering Atari with Discrete World Models.
+\newblock In \emph{International Conference on Learning Representations
+  (ICLR)}.
+
+\bibitem[{Hafner et~al.(2024)Hafner, Pasukonis, Ba, and Lillicrap}]{dreamerv3}
+Hafner, D.; Pasukonis, J.; Ba, J.; and Lillicrap, T. 2024.
+\newblock Mastering Diverse Domains through World Models.
+\newblock arXiv:2301.04104.
+
+\bibitem[{He et~al.(2026)He, Zhang, Lin, Xu, and Pan}]{dws}
+He, H.; Zhang, Y.; Lin, L.; Xu, Z.; and Pan, L. 2026.
+\newblock Pre-Trained Video Generative Models as World Simulators.
+\newblock \emph{Proceedings of the AAAI Conference on Artificial Intelligence},
+  40(6): 4645--4653.
+
+\bibitem[{Heusel et~al.(2017)Heusel, Ramsauer, Unterthiner, Nessler, and
+  Hochreiter}]{fid}
+Heusel, M.; Ramsauer, H.; Unterthiner, T.; Nessler, B.; and Hochreiter, S.
+  2017.
+\newblock {GANs} Trained by a Two Time-Scale Update Rule Converge to a Local
+  {Nash} Equilibrium.
+\newblock In \emph{Advances in Neural Information Processing Systems
+  (NeurIPS)}.
+
+\bibitem[{Kim et~al.(2026)Kim, Lee, Yun, Park, and Park}]{sdgrpo}
+Kim, H.; Lee, S.; Yun, H.; Park, J.; and Park, J. 2026.
+\newblock {SD-GRPO}: Verifiable Segment Decomposition for Long-Form
+  Vision-Language Generation.
+\newblock arXiv:2606.09871.
+
+\bibitem[{Kynk{\"a}{\"a}nniemi et~al.(2019)Kynk{\"a}{\"a}nniemi, Karras, Laine,
+  Lehtinen, and Aila}]{precisionrecall}
+Kynk{\"a}{\"a}nniemi, T.; Karras, T.; Laine, S.; Lehtinen, J.; and Aila, T.
+  2019.
+\newblock Improved Precision and Recall Metric for Assessing Generative Models.
+\newblock In \emph{Advances in Neural Information Processing Systems
+  (NeurIPS)}.
+
+\bibitem[{Liu et~al.(2025)Liu, Chen, Li, Qi, Pang, Du, Lee, and Lin}]{drgrpo}
+Liu, Z.; Chen, C.; Li, W.; Qi, P.; Pang, T.; Du, C.; Lee, W.~S.; and Lin, M.
+  2025.
+\newblock Understanding {R1-Zero}-Like Training: A Critical Perspective.
+\newblock arXiv:2503.20783.
+
+\bibitem[{Mentzer et~al.(2024)Mentzer, Minnen, Agustsson, and Tschannen}]{fsq}
+Mentzer, F.; Minnen, D.; Agustsson, E.; and Tschannen, M. 2024.
+\newblock Finite Scalar Quantization: {VQ-VAE} Made Simple.
+\newblock In \emph{International Conference on Learning Representations
+  (ICLR)}.
+
+\bibitem[{Naeem et~al.(2020)Naeem, Oh, Uh, Choi, and Yoo}]{densitycoverage}
+Naeem, M.~F.; Oh, S.~J.; Uh, Y.; Choi, Y.; and Yoo, J. 2020.
+\newblock Reliable Fidelity and Diversity Metrics for Generative Models.
+\newblock In \emph{International Conference on Machine Learning (ICML)}.
+
+\bibitem[{Oquab et~al.(2024)Oquab, Darcet, Moutakanni, Vo, Szafraniec,
+  Khalidov, Fernandez, Haziza, Massa, El-Nouby, Assran et~al.}]{dinov2}
+Oquab, M.; Darcet, T.; Moutakanni, T.; Vo, H.; Szafraniec, M.; Khalidov, V.;
+  Fernandez, P.; Haziza, D.; Massa, F.; El-Nouby, A.; Assran, M.; et~al. 2024.
+\newblock {DINOv2}: Learning Robust Visual Features without Supervision.
+\newblock arXiv:2304.07193.
+
+\bibitem[{Parthasarathi et~al.(2025)Parthasarathi, Reymond, Chen, Cui, and
+  Chandar}]{grpolambda}
+Parthasarathi, P.; Reymond, M.; Chen, B.; Cui, Y.; and Chandar, S. 2025.
+\newblock {GRPO}-$\lambda$: Credit Assignment improves {LLM} Reasoning.
+\newblock arXiv:2510.00194.
+
+\bibitem[{Savani et~al.(2026)Savani, Kveton, Liu, Wang, Shi, Mukherjee,
+  Vlassis, and Singh}]{stepwiseflowgrpo}
+Savani, Y.; Kveton, B.; Liu, Y.; Wang, Y.; Shi, J.; Mukherjee, S.; Vlassis, N.;
+  and Singh, K.~K. 2026.
+\newblock Stepwise Credit Assignment for {GRPO} on Flow-Matching Models.
+\newblock In \emph{IEEE/CVF Conference on Computer Vision and Pattern
+  Recognition (CVPR)}.
+
+\bibitem[{Shao et~al.(2024)Shao, Wang, Zhu, Xu, Song, Bi, Zhang, Zhang, Li, Wu,
+  and Guo}]{grpo}
+Shao, Z.; Wang, P.; Zhu, Q.; Xu, R.; Song, J.; Bi, X.; Zhang, H.; Zhang, M.;
+  Li, Y.~K.; Wu, Y.; and Guo, D. 2024.
+\newblock {DeepSeekMath}: Pushing the Limits of Mathematical Reasoning in Open
+  Language Models.
+\newblock arXiv:2402.03300.
+
+\bibitem[{Unterthiner et~al.(2018)Unterthiner, van Steenkiste, Kurach,
+  Marinier, Michalski, and Gelly}]{fvd}
+Unterthiner, T.; van Steenkiste, S.; Kurach, K.; Marinier, R.; Michalski, M.;
+  and Gelly, S. 2018.
+\newblock Towards Accurate Generative Models of Video: A New Metric and
+  Challenges.
+\newblock arXiv:1812.01717.
+
+\bibitem[{van~den Oord, Vinyals, and Kavukcuoglu(2017)}]{vqvae}
+van~den Oord, A.; Vinyals, O.; and Kavukcuoglu, K. 2017.
+\newblock Neural Discrete Representation Learning.
+\newblock In \emph{Advances in Neural Information Processing Systems
+  (NeurIPS)}.
+
+\bibitem[{Wang et~al.(2004)Wang, Bovik, Sheikh, and Simoncelli}]{ssim}
+Wang, Z.; Bovik, A.~C.; Sheikh, H.~R.; and Simoncelli, E.~P. 2004.
+\newblock Image Quality Assessment: From Error Visibility to Structural
+  Similarity.
+\newblock \emph{IEEE Transactions on Image Processing}, 13(4): 600--612.
+
+\bibitem[{Wu et~al.(2024)Wu, Yin, Feng, He, Li, Hao, and Long}]{ivideogpt}
+Wu, J.; Yin, S.; Feng, N.; He, X.; Li, D.; Hao, J.; and Long, M. 2024.
+\newblock {iVideoGPT}: Interactive {VideoGPTs} are Scalable World Models.
+\newblock In \emph{Advances in Neural Information Processing Systems
+  (NeurIPS)}.
+
+\bibitem[{Wu et~al.(2025)Wu, Yin, Feng, and Long}]{rlvrworld}
+Wu, J.; Yin, S.; Feng, N.; and Long, M. 2025.
+\newblock {RLVR-World}: Training World Models with Reinforcement Learning.
+\newblock In \emph{Advances in Neural Information Processing Systems
+  (NeurIPS)}.
+
+\bibitem[{Yan et~al.(2021)Yan, Zhang, Abbeel, and Srinivas}]{videogpt}
+Yan, W.; Zhang, Y.; Abbeel, P.; and Srinivas, A. 2021.
+\newblock {VideoGPT}: Video Generation using {VQ-VAE} and Transformers.
+\newblock arXiv:2104.10157.
+
+\bibitem[{Yu et~al.(2023)Yu, Cheng, Sohn, Lezama, Zhang, Chang, Hauptmann,
+  Yang, Hao, Essa, and Jiang}]{magvit}
+Yu, L.; Cheng, Y.; Sohn, K.; Lezama, J.; Zhang, H.; Chang, H.; Hauptmann,
+  A.~G.; Yang, M.-H.; Hao, Y.; Essa, I.; and Jiang, L. 2023.
+\newblock {MAGVIT}: Masked Generative Video Transformer.
+\newblock In \emph{IEEE/CVF Conference on Computer Vision and Pattern
+  Recognition (CVPR)}, 10459--10469.
+
+\bibitem[{Yu et~al.(2025)Yu, Zhang, Zhu, Yuan, Zuo, Yue, Dai, Fan, Liu, Liu,
+  Liu, Lin, Lin, Ma, Sheng et~al.}]{dapo}
+Yu, Q.; Zhang, Z.; Zhu, R.; Yuan, Y.; Zuo, X.; Yue, Y.; Dai, W.; Fan, T.; Liu,
+  G.; Liu, L.; Liu, X.; Lin, H.; Lin, Z.; Ma, B.; Sheng, G.; et~al. 2025.
+\newblock {DAPO}: An Open-Source {LLM} Reinforcement Learning System at Scale.
+\newblock arXiv:2503.14476.
+
+\bibitem[{Zhai et~al.(2026)Zhai, Chen, Zhao, Qian, Shen, and Lu}]{realrlvr}
+Zhai, Z.; Chen, M.; Zhao, J.; Qian, J.; Shen, L.; and Lu, Y. 2026.
+\newblock Rewards as Labels: Revisiting {RLVR} from a Classification
+  Perspective.
+\newblock arXiv:2602.05630.
+
+\bibitem[{Zhang et~al.(2018)Zhang, Isola, Efros, Shechtman, and Wang}]{lpips}
+Zhang, R.; Isola, P.; Efros, A.~A.; Shechtman, E.; and Wang, O. 2018.
+\newblock The Unreasonable Effectiveness of Deep Features as a Perceptual
+  Metric.
+\newblock In \emph{IEEE/CVF Conference on Computer Vision and Pattern
+  Recognition (CVPR)}.
+
+\bibitem[{Zheng et~al.(2025)Zheng, Liu, Li, Chen, Yu, Gao, Dang, Liu, Men,
+  Yang, Zhou, and Lin}]{gspo}
+Zheng, C.; Liu, S.; Li, M.; Chen, X.-H.; Yu, B.; Gao, C.; Dang, K.; Liu, Y.;
+  Men, R.; Yang, A.; Zhou, J.; and Lin, J. 2025.
+\newblock Group Sequence Policy Optimization.
+\newblock arXiv:2507.18071.
+
+\end{thebibliography}

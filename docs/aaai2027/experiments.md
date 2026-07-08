@@ -10,7 +10,10 @@
 | 离线 $\rho$/flip 诊断 | 已有首批结果 | pixel/MSE/a0faithful 的 flip 理论与实测吻合，解释 `mse_tok` 反常增益 |
 | GRPO 侧改造 | 已系统性判负 | Dr.GRPO/filter/segmental/REAL/GSPO 均无稳定正收益 |
 | 多步 MSP v3 (`kl=0.001`) | 完成 3 seed | best checkpoint 强，但 final checkpoint 不稳；动机化 temporal GRPO |
-| Temporal GRPO | 本地脚本已实现，待服务器 pilot | 新主菜：frame/return advantage + horizon-aware KL |
+| Multi-step step30 seq | 已完成 | RC + seq final-at-30 稳定优于 raw 与 official RLVR；`seq_rc` 已补到 5 seed |
+| Temporal-return GRPO | 已完成 5 seed | 最终主线：`return_hkl00` final LPIPS 0.1980 ± 0.0034，5/5 优于 official |
+| Temporal-gain GRPO | 已完成 5 seed | 对 `seq_rc` 的 0–2 seed 正向，但 5-seed 下不如 plain return；降级为正向但不稳定消融 |
+| Horizon-aware KL | 已完成 3 seed 消融 | 单独中性/略差，叠加 return 也无额外收益；降级为负/中性消融 |
 
 ## Multi-step MSP v3 Verdict
 
@@ -36,7 +39,62 @@ Verdict:
 - Negative/stability: final checkpoints are unstable; `kl=0.001` does not fully prevent policy drift.
 - Conservative use: multi-step can support “early learning signal transfers,” but not a final headline unless a fixed early-stop protocol passes.
 
-Recommended clean follow-up P0:
+P0 step30 result:
+
+| arm | final LPIPS | LPIPS-last | MSE | official final win |
+|---|---:|---:|---:|---:|
+| seq raw | 0.2115 ± 0.0060 | 0.2309 ± 0.0196 | 0.01431 ± 0.00056 | 2/3 |
+| seq RC | 0.1997 ± 0.0051 | 0.2095 ± 0.0059 | 0.01279 ± 0.00082 | 3/3 |
+| return RC, uniform KL | 0.1980 ± 0.0034 | 0.2055 ± 0.0026 | 0.01276 ± 0.00069 | 5/5 |
+| gain-return RC, uniform KL | 0.1989 ± 0.0070 | 0.2072 ± 0.0068 | 0.01271 ± 0.00101 | 5/5 |
+| seq RC + horizon KL | 0.2005 ± 0.0059 | 0.2117 ± 0.0087 | 0.01297 ± 0.00095 | 3/3 |
+| return RC + horizon KL | 0.1977 ± 0.0012 | 0.2064 ± 0.0014 | 0.01262 ± 0.00007 | 3/3 |
+
+Paired deltas:
+
+- `seq_rc - seq_raw`: final LPIPS $\Delta=-0.0118$, 3/3 wins; LPIPS-last $\Delta=-0.0215$, 3/3 wins.
+- `return_hkl00 - seq_rc`: final LPIPS $\Delta=-0.0029$, 4/5 wins; LPIPS-last $\Delta=-0.0041$, 4/5 wins. This is the final 5-seed evidence for temporal-return GRPO.
+- `gain_a05 - seq_rc` on shared seeds 0–2: final LPIPS $\Delta=-0.0036$, 3/3 wins; LPIPS-last $\Delta=-0.0046$, 3/3 wins.
+- `gain_a05 - return_hkl00` on seeds 0–4: final LPIPS $\Delta=+0.0009$, 1/5 wins; LPIPS-last $\Delta=+0.0017$, 2/5 wins. Gain-return is not better than plain temporal-return and has larger variance.
+- `seq_hkl05 - seq_rc`: final LPIPS $\Delta=+0.0008$, 1/3 wins; horizon-aware KL alone is neutral/slightly worse.
+- `return_hkl05 - return_hkl00`: final LPIPS $\Delta=+0.0008$, 1/3 wins; horizon-aware KL does not improve temporal-return.
+
+Verdict:
+
+- Step30 fixed protocol passes: multi-step no longer只能用 best checkpoint，final-at-30 已可作为读数。
+- Strong result is RC vs raw under the same seq GRPO: this proves verifier calibration transfers to multi-step.
+- Temporal-return GRPO is the final GRPO-side mainline: it is more stable than gain-return and 5/5 beats official held-out RLVR.
+- Temporal-gain GRPO gives a positive signal versus `seq_rc` on seeds 0–2 but fails the 5-seed head-to-head against plain temporal-return; report it as a tested but unstable variant, not as the main method.
+- Horizon-aware KL is not supported by the ablation. It should be written as a tested-but-unhelpful stabilization attempt, not as a contribution.
+
+Immediate missing evidence:
+
+- Completed: `seq_rc` seeds 3,4 have been added; `return_hkl00` vs `seq_rc` is now a 5-seed paired comparison.
+- Completed: per-horizon evaluation confirms return GRPO's advantage grows with horizon.
+
+Per-horizon readout (`return_rc - seq_rc`, negative is better):
+
+| horizon | LPIPS delta | MSE delta | PSNR delta | SSIM delta |
+|---:|---:|---:|---:|---:|
+| 2 | -0.00160 | +0.00001 | +0.04396 | +0.00120 |
+| 3 | -0.00221 | -0.00018 | +0.11132 | +0.00284 |
+| 4 | -0.00241 | -0.00025 | +0.15766 | +0.00337 |
+| 5 | -0.00341 | -0.00040 | +0.20745 | +0.00520 |
+| 6 | -0.00354 | -0.00046 | +0.23973 | +0.00421 |
+| 7 | -0.00408 | -0.00057 | +0.23454 | +0.00502 |
+
+Aggregated over seed-horizon cells (`return_rc - seq_rc`):
+
+- LPIPS: $\Delta=-0.00287$, 22/30 wins.
+- MSE: $\Delta=-0.00031$, 20/30 wins.
+- MAE: $\Delta=-0.00139$, 20/30 wins.
+- PSNR: $\Delta=+0.16578$, 21/30 wins.
+- SSIM: $\Delta=+0.00364$, 21/30 wins.
+- dmotion: $\Delta=-0.00111$, 14/30 wins, not supportive.
+
+Verdict: temporal-return GRPO's advantage is not a single-LPIPS artifact; it is consistent across full-reference fidelity metrics (LPIPS/MSE/MAE/PSNR/SSIM), and it grows toward later rollout frames. It does **not** improve the cheap dynamic-direction proxy `dmotion`, so dynamic improvement should not be claimed from this experiment.
+
+Historical recommended clean follow-up P0:
 
 ```bash
 steps=30, eval_every=10, kl=0.001, raw/rc × seeds 0,1,2
@@ -49,6 +107,7 @@ Recommended clean follow-up P1:
 ```bash
 --adv_temporal seq --rewards raw,rc --seeds 0,1,2
 --adv_temporal return --rewards rc --seeds 0,1,2
+--adv_temporal gain_return --gain_alpha 0.5 --rewards rc --seeds 0,1,2
 --adv_temporal frame --rewards rc --seeds 0,1,2
 ```
 
