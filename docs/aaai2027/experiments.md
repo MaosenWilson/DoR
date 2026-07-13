@@ -65,7 +65,7 @@ Headline metrics 均相对 raw real frames：LPIPS-vgg、MSE、PSNR、SSIM。LPI
 | seq-RC − seq-raw | LPIPS-last $\downarrow$ | -0.00454 | 5/10 | -0.84 | 0.420 | not confirmed |
 | seq-RC − seq-raw | MSE $\downarrow$ | -0.000412 | 6/10 | -1.26 | 0.239 | not confirmed |
 
-旧 seeds 0--4 的 5/5 方向没有在新增 seeds 5--9 复现（LPIPS 仅 1/5）。因此不能声称 RC 在 multi-step sequence GRPO 中独立改善训练；C1 的有效性必须由 local reachability gate、single-step transfer 和完整 factorial interaction 重新界定。
+旧 seeds 0--4 的 5/5 方向没有在新增 seeds 5--9 复现（LPIPS 仅 1/5）。因此不能声称 RC 在 multi-step sequence GRPO 中独立改善训练；C1 的有效性必须由 single-step transfer、排序闭环与独立的 decision-level validation 重新界定。
 
 ## 4. C2：Temporal-Return GRPO
 

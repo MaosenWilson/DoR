@@ -25,7 +25,7 @@ engineering alone as a headline contribution.
 | Component | Status | Claim boundary |
 |---|---|---|
 | Encoder reconstruction | rejected as a metric projection | A 64-window legal-FSQ audit found a better reachable target in every window. |
-| MRRT | target-level gate passed | Fixed-budget metric refinement beats a matched random legal-code control on all 24 training windows; downstream training is ongoing. |
+| MRRT | rejected at the training endpoint | It improves the fixed-budget target metric, but does not beat encoder RC or its matched-random control in the paired three-seed downstream pilot. |
 | Temporal Return | provisional | Earlier multi-step gains must be reproduced with RLVR-World/VERL's `low_var_kl` estimator. |
 | Rank-Guard, GSPO, REAL-style VPO, spatial pooling | rejected or non-beneficial | Excluded from the active method. |
 
