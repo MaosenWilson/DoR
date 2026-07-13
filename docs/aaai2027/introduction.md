@@ -1,148 +1,39 @@
-# Introduction 中文工作稿
+# Introduction 中文正式工作稿
 
-> 标题：**RC-GRPO: Reconstruction-Calibrated Temporal Credit Assignment for Tokenized Video World Models**  
-> 中文暂译：**RC-GRPO：面向 Tokenized 视频世界模型的重建校准式时间信用分配**
+## 段落任务
 
-## 0. 写作定位
+1. 世界模型后训练的意义，以及 RLVR 的吸引力；
+2. tokenized video verifier 的输出空间错位；
+3. multi-step GRPO 的时间信用错位；
+4. 统一视角与方法；
+5. 贡献与证据边界。
 
-本文不是“提出一个更好的 reward”的论文，也不是“提出一个通用 GRPO optimizer”的论文。
+## 正式中文稿
 
-更稳的定位是：
+世界模型需要根据当前视觉状态与动作预测未来状态，其价值取决于预测是否足以支持理解、规划和控制。自回归视频世界模型通常先把视频压缩为离散视觉 token，再以序列建模方式预测未来。最大似然训练优化 token likelihood，却不直接优化使用者关心的像素保真或感知质量。RLVR-World 因而提出用可自动计算的 MSE、LPIPS 等预测指标作为 verifiable rewards，并通过 group-relative policy optimization（GRPO）直接后训练世界模型。这一范式绕开人工偏好标注，为视频生成模型提供了简洁的任务对齐接口。
 
-> 在 tokenized video world model 中，verifiable reward 经过 decoder 后并不天然可靠；单步实验揭示并校准 verifier 侧的重建地板，而多步 rollout 进一步暴露 sequence-level GRPO 信用分配过粗的问题。RC-GRPO 将 reconstruction-calibrated verifier 与 frame-level temporal credit assignment 结合，用于改善多步视频世界模型的可验证强化微调。
+然而，verifiable 并不意味着对策略学习可靠。Tokenized video model 不直接输出任意像素图像；其预测必须经过冻结 decoder，因此只能落在 decoder 的可达输出集合内。真实 future frame 通常不严格属于该集合。即使策略预测了 ground-truth visual tokens，decoder 仍会留下 tokenizer reconstruction residual。该残差中与候选无关的常数部分会被 GRPO 组内去均值消除，但候选预测误差与残差的交互项会改变 pairwise ordering。于是，一个数值完全可计算的 decoded reward 仍可能向 GRPO 提供错误的相对偏好。
 
-## 1. 术语表
+多步 rollout 进一步引入时间信用错位。Sequence-level GRPO 将整段 future prediction 压缩成一个 reward，并把同一优势广播给所有 future tokens，无法区分早期 frame block 对后续误差传播的责任。简单地改成逐帧优势也不能解决这一问题，因为它只奖励当前帧并切断延迟影响。近期视觉生成中的 stepwise GRPO 工作同样表明，生成轨迹内部的不同步骤不应共享粗粒度 outcome credit；但 diffusion/flow denoising steps 与 action-conditioned autoregressive future frames 具有不同的因果语义，也没有处理冻结 video codec 引起的 verifier rank corruption。
 
-| Canonical term | 中文解释 | 决策 |
-|---|---|---|
-| tokenized video world model | 通过视觉 tokenizer 把帧离散化，再用自回归模型预测未来 token 的视频世界模型 | 英文正文使用该词 |
-| verifiable reward | 与真实未来帧或其可达重建目标比较得到的奖励 | 不写成 learned reward |
-| reconstruction floor | tokenizer encode-decode 往返造成的不可约重建残差 | 我们自定义术语，需明确不是官方概念 |
-| reachable target | $\tilde{s}=D(E(s))$，tokenizer 可达的 decoded ground truth | 用于 reconstruction-calibrated reward |
-| RC-GRPO | Reconstruction-Calibrated GRPO | 方法名 |
-| temporal credit assignment | 多步 rollout 中把优势分配到 future-frame block，而不是整条序列共享同一个 scalar advantage | 主方法贡献 |
-| temporal-return advantage | 用未来帧 reward return 构造每个 frame block 的 advantage | 最终采用的多步 GRPO 形式 |
+我们从 group-relative ranking reliability 统一处理这两个问题。首先，我们把 raw target 与其 tokenizer-reachable reconstruction 之间的失配操作化为 reconstruction-induced rank corruption，并用候选排序相关性预测 pairwise flip probability。基于该诊断，我们提出 reconstruction-calibrated（RC）verifier：将 ground truth 通过同一冻结 tokenizer-decoder 投影后再计算原有 MSE+LPIPS reward。其次，我们将 multi-step GRPO 的信用单位改为 future-frame token block，通过 temporal return 把后续预测质量分配给能够影响它的前序 block。进一步的候选扩展使用各 horizon 实测的 rank-flip probability 调制 temporal return；该扩展只有在离线重放与 paired training 通过后才进入正式方法。
 
-## 2. Introduction 段落地图
+当前证据支持两项贡献。第一，我们建立了从 reachable-target mismatch、相关性预测的排序翻转、同候选 RC 重评分到 paired training 改善的诊断—修复闭环。第二，我们提出 frame-block temporal-return GRPO：在当前 5-seed RT-1 multi-step protocol 下，其 full-reference fidelity 均值优于 sequence-level RC，frame-only 对照显著退化，且相对收益随 rollout horizon 增长。我们同时报告边界：额外 reward components、通用 GRPO 替换和 horizon-aware KL 未产生稳定增益，motion 与 distributional realism 也不支持全面改善。固定 $n=10$ 扩种、完整 verifier×credit 因子对照和 rank-reliable return 门控用于决定最终投稿版本的主张强度。
 
-### P1. Field stake
+## 当前贡献句
 
-目标：建立 video world model + tokenization + RL post-training 的重要性。
+1. **Verifier diagnosis and calibration.** 我们识别 tokenized video RLVR 中由不可达 raw target 引起的 candidate-dependent rank corruption，并用最小 RC verifier 完成机制与训练闭环。
+2. **Video-structured temporal credit.** 我们将 GRPO 的 sequence-level advantage 重构为 frame-block temporal returns，并通过 frame-only、gain、KL 和 horizon 分析隔离有效结构。
 
-要点：
+## C3 通过后的替换句
 
-- Video world models 将 action-conditioned future prediction 作为可交互环境建模的核心。
-- Tokenized autoregressive world models 通过视觉 tokenizer 把视频预测变成 sequence modeling。
-- RL-style post-training with verifiable rewards 为这类模型提供了从采样候选中强化更好预测的路径。
+只有 Rank-Reliable Return 通过预注册门控和训练后，才把第二条升级为：
 
-建议引用：
+> We introduce rank-reliable temporal credit assignment, which weights future-frame returns by horizon-wise verifier reliability measured from pairwise rank corruption, unifying reconstruction calibration and temporal credit under a single ranking principle.
 
-`ivideogpt`, `genie`, `dreamerv3`, `rt1`, `openxembodiment`, `rlvrworld`, `grpo`
+## 边界
 
-### P2. Bottleneck: verifiable does not mean clean
-
-目标：提出本文第一个核心问题。
-
-要点：
-
-- RLVR-style 框架通常把 decoded predictions 和 ground-truth future frame 做 full-reference comparison。
-- 但 tokenized model 的 decoder 本身有不可约 reconstruction floor。
-- 这个 floor 与预测质量无关，却会进入 post-decode reward。
-- GRPO 依赖组内相对排序，因此问题不是 reward 数值偏移，而是候选排序被腐蚀。
-
-建议引用：
-
-`vqvae`, `vqgan`, `fsq`, `lpips`, `ssim`, `perceptiondistortion`
-
-### P3. Deeper gap: multi-step rollout needs temporal credit
-
-目标：把论文主菜从 reward 校准自然推进到 GRPO 侧。
-
-要点：
-
-- 单步中，reachable-target calibration 可以修复 verifier target mismatch。
-- 多步中，视频 rollout 是自条件过程，早期预测会影响后续帧。
-- 原始 sequence-level GRPO 把整条 rollout 压成一个 scalar advantage，再广播到所有 token。
-- 这会混淆不同 future frames 的责任，尤其在后期误差累积时更严重。
-- 现有细粒度 GRPO credit assignment 工作说明 coarse sequence-level advantage 是普遍问题，但 tokenized video 的自然信用单元不是文本 token，而是 future-frame block。
-
-建议引用：
-
-`grpolambda`, `spo`, `sdgrpo`, `stepwiseflowgrpo`, `dapo`
-
-### P4. Our approach
-
-目标：定义 RC-GRPO。
-
-要点：
-
-- RC-GRPO 保留 RLVR-style sample group、verifiable reward、group-relative update。
-- 第一部分：用 reachable target $D(E(s_t))$ 替代 raw ground truth，得到 reconstruction-calibrated verifier。
-- 第二部分：在 multi-step rollout 中计算 frame-level verifiable rewards，并把 temporal-return advantage 作用到对应 future-frame token block。
-- 不是替换世界模型架构，也不是引入 learned critic。
-
-### P5. Evidence and contribution summary
-
-目标：概括证据，但不堆数字。
-
-要点：
-
-- 单步离线诊断显示不同 reward 的 rank flip 与 $\arccos(\rho)/\pi$ 理论吻合。
-- RC calibration 在单步和多步中都改善或稳定 full-reference fidelity。
-- 在 multi-step fixed-step protocol 下，temporal-return RC-GRPO 优于 raw/sequence-level baselines，并且优势随 horizon 增长。
-- 系统性负结果显示，直接替换通用 GRPO 变体并不能解决该问题；有效干预点在 video-structured verifier calibration 与 temporal credit assignment。
-
-## 3. 结构审查与修改决策 v2
-
-参考 **Pre-Trained Video Generative Models as World Simulators** 的 AAAI-2026 写法后，当前引言需要从“模块解释”改成“挑战拆解”。DWS 的结构不是一开始就讲实现细节，而是先把视频世界模型的场景、现有路线和关键困难讲清楚，再说明方法如何分别处理这些困难。因此，本稿采用：
-
-> field stake → two failure modes → method response → evidence and contributions
-
-具体修改决策：
-
-- 把“reward 设计”降级为 verifier-side mismatch 的校准问题，不把它写成主菜。
-- 把“multi-step temporal credit assignment”提前为第二个 failure mode，让 GRPO 侧贡献成为主线。
-- 贡献列表改为三点：reconstruction-floor diagnosis、reconstruction-calibrated verifier、temporal-return GRPO。
-- 结果表述保持克制：只写 fixed held-out protocol 下 full-reference fidelity 改善，不声称动态指标全面提升，不声称通用 GRPO 改进。
-
-## 4. 正式中文引言 v2
-
-视频世界模型在给定历史观测和动作的条件下预测未来视觉状态，可为机器人控制、交互式仿真和模型式强化学习提供可采样的环境模型。一个主流实现路线是将视觉观测 tokenized：先用视觉 tokenizer 把图像帧压缩为离散 token，再用自回归模型预测未来 token，最后由 decoder 还原为图像。这样，action-conditioned video prediction 被转化为序列建模问题，也使视频世界模型可以借鉴语言模型中的采样和强化微调范式。近期的 verifiable reward 框架进一步提出：对同一状态-动作上下文采样一组候选未来帧，用 full-reference verifier 将 decoded predictions 与真实未来帧比较，再通过 GRPO 强化组内得分更高的候选。这个流程的吸引力在于，它不需要 learned critic，而是直接利用可测量的预测误差进行后训练。
-
-本文关注一个更具体但关键的问题：当世界模型依赖 lossy visual tokenizer 时，decoded full-reference reward 是否仍然是适合 GRPO 的训练信号，尤其是在 multi-step rollout 中？我们发现这里存在两个相互关联的失配。第一，verifier 通常把 decoded prediction 与 raw ground truth 比较，但 raw ground truth 并不一定处在 tokenizer-decoder 可达的图像空间中。第二，多步 rollout 通常被压缩为一个 sequence-level advantage，但视频预测是自回归过程，早期帧会成为后续帧的条件，错误会沿 horizon 传播。这两个问题不会破坏“可验证”本身：每个候选仍然能和已知目标比较；但它们会破坏 GRPO 真正消费的训练信号，即组内排序和时间信用分配。
-
-第一个失配发生在 verifier 侧。lossy visual tokenizer 会在 ground-truth frame 的 encode-decode 往返中产生不可约残差，我们将其称为 reconstruction floor。这个残差并非任何候选预测造成，却会被 MSE、SSIM、LPIPS 等 post-decode metrics 一并计入 reward。对于普通评测，这可以理解为 tokenizer 的重建质量上限；但对于 GRPO，它会变成排序噪声。因为 GRPO 使用组内归一化优势，关键不是 reward 数值是否整体偏移，而是本应排在前面的候选是否因为 decoder-side residual 被排到后面。
-
-第二个失配发生在 rollout 侧。单步预测只需要判断下一帧候选的相对好坏；多步视频世界模型则会把前一步生成结果继续作为后续预测条件。此时，一个后期帧错误可能来自当前帧 token，也可能来自更早帧的误差传播。标准 sequence-level GRPO 将整条 rollout 压成一个 scalar advantage，并把它广播到所有生成 token，因而忽略了视频预测的时间结构。已有一些 GRPO-style 工作讨论了长序列推理或生成过程中的细粒度信用分配，但 tokenized video world model 的自然信用单元不是文本 token，也不是 denoising step，而是一个 future frame 对应的 visual-token block。
-
-为此，我们提出 **RC-GRPO**，即 reconstruction-calibrated temporal credit assignment for tokenized video world models。RC-GRPO 保留 sample group、verifiable reward 和 group-relative update 的基本框架，只在视频结构真正起作用的位置修改训练信号。首先，在 verifier calibration 中，我们把 raw ground-truth target 替换为 tokenizer-reachable target $\tilde{s}_t=D(E(s_t))$，使 decoded prediction 与 decoded reachable target 在同一可达空间中比较。其次，在 multi-step rollout 中，我们计算 frame-level verifiable rewards，并用 temporal-return advantage 为每个 future-frame token block 分配信用。这样，早期 token 可以通过其对后续帧质量的影响获得 credit，而不同 horizon 的预测误差也不会被混合成一个 rollout-level scalar。
-
-本文的贡献有三点。第一，我们识别并量化 tokenized video GRPO 中的 reconstruction-floor failure mode，并验证 post-decode verifier 的 pairwise rank flips 与 $\arccos(\rho)/\pi$ 的理论关系在多个 reward spaces 上一致。第二，我们提出 reconstruction-calibrated verifier，使单步和多步训练都能使用 tokenizer-reachable target，避免把 decoder 不可达误差错误地计入候选预测质量。第三，我们提出 temporal-return GRPO，用 frame-level returns 替代 sequence-level advantage；在 RT-1 prediction 的固定 held-out protocol 下，该方法相对 sequence-level GRPO 改善 LPIPS、MSE、MAE、PSNR 和 SSIM 等 full-reference fidelity metrics，且收益主要出现在更长 horizon。我们同时报告 rank-label VPO、GSPO、segment-level variants 等通用 GRPO 替换的负结果，说明该任务的有效干预点不是简单更换优化器，而是同时处理 verifier-side reconstruction mismatch 与 rollout-side temporal credit assignment。
-
-## 5. 英文 LaTeX 写作映射
-
-中文 v2 转英文时采用 6 段结构：
-
-1. **Context**：video world models + tokenized sequence modeling + verifiable post-training。
-2. **Two failure modes**：verifier target mismatch + sequence-level temporal credit mismatch。
-3. **Verifier gap**：post-decode verifier 受 reconstruction floor 影响，GRPO 关心组内排序。
-4. **Temporal gap**：multi-step rollout 自条件，sequence-level advantage 太粗。
-5. **Approach**：RC-GRPO = reachable target calibration + temporal-return frame-block advantage。
-6. **Contributions and boundary**：rank-flip 诊断、multi-step full-reference fidelity、负结果边界。
-
-## 6. 当前引言中的边界
-
-必须保留的边界：
-
-- 不声称 RC-GRPO 是通用 GRPO 改进。
-- 不声称 code reward 普遍优于 pixel/perceptual reward。
-- 不声称动态指标全面提升；当前 `dmotion` 不支持这一点。
-- 不声称完整训练设置击败官方 RLVR，只能写在相同 held-out protocol / fixed-step readout 下的结果。
-- 不把 reconstruction floor 写成已有官方术语；它是本文定义的诊断概念。
-
-## 7. 需要后续补齐
-
-- 将中文引言继续压缩为更短的 AAAI camera-ready 版本。
-- 确认每个 citation key 是否最终保留。
-- Introduction 不应塞入过多数字；详细结果放 Experiments。
-- 需要决定是否在最后贡献列表显式列 3 点，还是用一段自然语言总结。AAAI 风格可以列点，但不宜过长。
+- 不声称 reward-to-go 本身是新理论；新颖性必须来自 tokenized video frame blocks、verifier reliability 和实证闭环；
+- 不声称全面改善 motion/diversity/distribution；
+- 不把负结果数量写成贡献；
+- 不在 C3 验证前修改 tex 的标题和 contribution list。

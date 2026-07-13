@@ -1,18 +1,14 @@
 # Data Directory
 
-This directory is a mount point for server-side datasets.
-
-Expected layout:
+This ignored directory is a server-side mount for the RT-1 `fractal20220817`
+episodes used by the current experiments.
 
 ```text
 data/
-  rt1/             RT-1 data or symlinks.
-  raw/             Raw downloaded data.
-  processed/       Preprocessed samples.
-  cache/
-    candidates/    Candidate token/frame caches.
-  manifests/       Lightweight dataset split manifests.
+  processed/
+    fractal20220817_data/
+      *.npz
 ```
 
-Large files are ignored by git.
-
+Each episode must contain `image` (`uint8`, `[T,H,W,3]`) and `action`
+(`float`, `[T,13]`). The active loader is `src/dor/episodes.py`.

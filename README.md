@@ -1,108 +1,84 @@
-# DoR — Dynamics over Reconstruction
+# DoR: Reconstruction-Calibrated GRPO for Tokenized Video World Models
 
-**Calibrating verifiable rewards for video world models.** (Project handle: `DoR`, formerly `Vote2World`.)
+DoR is a research codebase for verifiable-reward post-training of tokenized video
+world models. It uses an RT-1 robot-manipulation world model, a frozen visual
+tokenizer, full-reference video rewards, and lightweight GRPO-style policy updates.
 
-Video world-model RL post-training (RLVR-World style) scores candidate next-frame
-predictions against a held-out ground-truth frame and turns that score into a GRPO
-reward. The problem: a pixel-space metric like LPIPS is dominated by **tokenizer
-reconstruction noise**, not dynamics — frame-to-frame motion in this setting
-(≈0.040 LPIPS) is *smaller* than the tokenizer's own encode/decode floor
-(≈0.053 LPIPS). The model ends up being rewarded for texture fidelity, not for
-predicting the right motion.
+The current paper target is **RC-GRPO: Reconstruction-Calibrated Temporal Credit
+Assignment for Tokenized Video World Models**.
 
-**DoR's contribution:** move the verifiable reward out of pixel space and into the
-visual tokenizer's pre-decode code space (FSQ `indices_to_codes`), where there is no
-reconstruction floor to fight. A secondary, demoted contribution (originally the
-project's starting point) reshapes the GRPO advantage with intra-group consensus —
-kept as an ablation, not the headline.
+## Research question
 
-## Headline result (2026-06-16, 5 seeds × 40 GRPO steps, RT-1 single-step)
+Predictions are decoded before a reward is compared with the real future frame. DoR
+studies two coupled questions:
 
-Code-space reward beats the pixel-LPIPS baseline on all three held-out metrics,
-every seed:
+1. Is the encoder-decoder reconstruction of ground truth the right reachable verifier
+   target, or can a legal nearby token code match the reward metric more faithfully?
+2. In multi-step rollout, should a sequence-level verifier score be broadcast to every
+   predicted frame block, or assigned by a temporally aligned reward-to-go?
 
-| metric (step 40) | pixel reward | code reward | paired wins |
-|---|---|---|---|
-| eval LPIPS  | 0.0834 ± 0.0007 | **0.0813 ± 0.0011** | 5/5 |
-| code RMS    | 0.3459 ± 0.0014 | **0.3341 ± 0.0031** | 5/5 |
-| PSNR        | 24.61 ± 0.05    | **24.82 ± 0.11**    | 5/5 |
+The repository uses falsifiable gates for both questions rather than treating reward
+engineering alone as a headline contribution.
 
-Full method and derivation: [docs/DoR_method.md](docs/DoR_method.md). Experiment
-ledger and raw run logs: [docs/experiments/](docs/experiments/).
+## Current evidence status
 
-## Method sketch
+| Component | Status | Claim boundary |
+|---|---|---|
+| Encoder reconstruction | rejected as a metric projection | A 64-window legal-FSQ audit found a better reachable target in every window. |
+| MRRT | target-level gate passed | Fixed-budget metric refinement beats a matched random legal-code control on all 24 training windows; downstream training is ongoing. |
+| Temporal Return | provisional | Earlier multi-step gains must be reproduced with RLVR-World/VERL's `low_var_kl` estimator. |
+| Rank-Guard, GSPO, REAL-style VPO, spatial pooling | rejected or non-beneficial | Excluded from the active method. |
 
-Skeleton = RLVR-World (GT-verifiable reward + GRPO). Two independent axes:
+The canonical claim-evidence ledger is [docs/aaai2027/story.md](docs/aaai2027/story.md).
+Do not cite preliminary README numbers as paper results.
 
-1. **Reward distance `D`** — `pixel` (-LPIPS, baseline) / `code` (FSQ code-space
-   RMS, no decode — the DoR contribution) / `hybrid` (z-scored fusion).
-2. **Advantage shaping** — `gt_only` (unmodified GRPO) / `hybrid_add` / `hybrid_mult`
-   (consensus-shaped advantage, ablation; degrades to `gt_only` when β=0, and never
-   lets group consensus override a GT-bad candidate).
-
-Both axes are orthogonal and live in `src/dor/rewards.py` / `src/dor/grpo.py`.
-
-## Repository layout
+## Layout
 
 ```text
-src/dor/             Core package: rewards, GRPO loop, consensus, generation, metrics, tokenization.
-  data/              RT-1 episode loading, window sampling, no-GT adaptation contracts.
-  processors/        Adaptation-side preprocessing.
-scripts/             Entry points: smoke_test / cache_candidates / analyze_consensus / train_grpo,
-                     diagnostic probes (probe_phi_dino, probe_phi_latent, probe_tokenizer_floor),
-                     figures/ (plotting), rt1/ (RT-1 input-pipeline audit & download).
-configs/             YAML configs (grpo, analysis, ablations, baseline).
-tests/               Unit tests, incl. no-future-GT leakage checks.
-docs/
-  DoR_method.md      Canonical method write-up (this is the paper-writing source of truth).
-  experiments/       Experiment ledger (EXPERIMENTS.md) + per-run result logs + template.
-  research/          Earlier research plans (pre-rename, retained for context).
-  engineering/       Workspace conventions.
-  论文写作操作流_SOP.md   Paper-writing tool/skill SOP (nature-skills vs paperspine).
-reports/             RT-1 input-pipeline / action-schema audit reports.
-extended_abstract/   Separate ICICIC 2026 extended-abstract deliverable (multi-level
-                     consistency reward for DIAMOND CS:GO) — independent of the DoR main paper.
-third_party/RLVR-World/   Upstream checkout, git-ignored.
-data/ checkpoints/ outputs/  Git-ignored; live on the training server only.
+src/dor/                 Training, model/tokenizer adapters, rewards, metrics,
+                         reachable-target refinement, and temporal credit utilities.
+scripts/                 Reproducible training, caching, auditing, evaluation, and analysis.
+tests/                   Unit and analysis-contract tests.
+docs/aaai2027/           Canonical paper story, method, experiment ledger, reviewer audit, runbook.
+docs/AuthorKit27/        AAAI anonymous-submission LaTeX source and cited figures.
+data/                    Ignored server-side RT-1 data mount.
+checkpoints/             Ignored server-side model and tokenizer checkpoints.
+outputs/                 Ignored generated runs, caches, and evaluation artifacts.
+third_party/             Ignored upstream RLVR-World checkout.
 ```
 
-## Quickstart (training server)
+## Environment
+
+The intended runtime is a CUDA Linux training server. It requires Python 3.10+, PyTorch
+with CUDA, `transformers`, `lpips`, `piqa`, `scipy`, and the dependencies required by
+RLVR-World/iVideoGPT.
 
 ```bash
+git clone https://github.com/MaosenWilson/DoR.git
+cd DoR
 pip install -e .
-python scripts/smoke_test.py                 # load + generate + score sanity check
-python scripts/cache_candidates.py --n_windows 200 --K 16
-python scripts/analyze_consensus.py           # Q1 consensus<->GT correlation, Q2 selection
-python scripts/train_grpo.py --rewards pixel,code,hybrid --modes gt_only \
-       --steps 40 --K 16 --seed 0 --out outputs/grpo/curves.json
+export VOTE2WORLD_ROOT=/path/to/vote2world
 ```
 
-Engineering notes:
-- Blackwell (sm_120) cannot run upstream verl/vllm 0.6.3 — uses HF `.generate()` + a
-  lightweight custom GRPO instead.
-- `src/dor/compat.py` shims `huggingface_hub.cached_download` for diffusers 0.27.
-- Every reward mode starts from the same pre-RL base checkpoint
-  (`thuml/rt1-world-model-single-step-base`) for a fair comparison.
-- Server-internal paths (`configs/vote2world/`, `reports/vote2world_*`, the
-  `/root/autodl-tmp/vote2world` project directory) intentionally still say
-  `vote2world` — renaming them is pure busywork with no payoff, the importable
-  package is `dor`.
+`src/dor/constants.py` documents expected checkpoint, tokenizer, action-range, and data
+paths. Large assets, caches, and run outputs are intentionally not tracked.
 
-## Status
+## Active experiments
 
-Renamed from `Vote2World` to `DoR` on 2026-06-15 after the tokenizer-floor diagnosis
-above. Target has been raised from an ICICIC 2026 extended abstract to a top-venue
-submission; method is locked, multi-seed robustness for the code-reward result is
-confirmed, next steps are longer training runs, a third (hybrid) arm, and a
-consensus × code-reward interaction ablation — see
-[docs/experiments/EXPERIMENTS.md](docs/experiments/EXPERIMENTS.md).
+The sole runbook is [docs/aaai2027/RUN.md](docs/aaai2027/RUN.md):
 
-## References
+1. audit and cache the Metric-Refined Reachable Target (MRRT);
+2. compare raw GT, encoder reconstruction, MRRT, and matched-random legal targets under
+   identical single-step GRPO;
+3. reproduce the multi-step `raw/RC x sequence/temporal-return` factorial with
+   `low_var_kl`;
+4. only after that factorial passes, run temporal-correspondence controls.
 
-- Wu, Yin, Feng, Long. *RLVR-World: Training World Models with Reinforcement
-  Learning.* arXiv:2505.13934, 2025.
-- *TTRL: Test-Time Reinforcement Learning.* NeurIPS 2025.
-- *ToolRL: Reward is All Tool Learning Needs.* NeurIPS 2025.
+Commands run in the foreground and write JSON artifacts containing their protocol and
+held-out metrics. Analysis scripts reject missing seeds and protocol mismatches.
 
-Large-file policy and the full reference list with verified citations live in
-[docs/DoR_method.md](docs/DoR_method.md).
+## Paper workflow
+
+The LaTeX source is [docs/AuthorKit27/AnonymousSubmission2027.tex](docs/AuthorKit27/AnonymousSubmission2027.tex).
+Before changing the manuscript, update `story.md`, then `experiments.md`; update Method
+and LaTeX only after the relevant evidence passes its predeclared gate.

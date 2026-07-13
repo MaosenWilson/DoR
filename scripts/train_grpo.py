@@ -50,6 +50,12 @@ def main():
                     help="Magnitude-ratio penalty in code-motion residual reward")
     ap.add_argument("--dyn_tau", type=float, default=0.0,
                     help="Disable dynamic auxiliary when GT code-motion norm <= dyn_tau")
+    ap.add_argument("--rcmg_pre_weight", type=float, default=0.5,
+                    help="MG-RC balance between pre-decode and post-decode domains; fixed paper default=0.5")
+    ap.add_argument("--rankcal_weights", default="",
+                    help="Frozen JSON from calibrate_rank_reward.py for rankcal_* rewards")
+    ap.add_argument("--reachable_target_cache", default="",
+                    help="NPZ from cache_mrrt_targets.py, required by mrrt/mrrt_random")
     ap.add_argument("--floor_filter", action="store_true",
                     help="Floor-aware GRPO: skip groups with std_k(code)/s_code <= tau*sigma_eta_norm")
     ap.add_argument("--tau", type=float, default=1.0, help="floor-filter threshold multiple")
@@ -128,6 +134,9 @@ def main():
                      rank_sigma=args.rank_sigma, rank_sigma_scale=args.rank_sigma_scale,
                      rank_min_weight=args.rank_min_weight,
                      dyn_lambda=args.dyn_lambda, dyn_gamma=args.dyn_gamma, dyn_tau=args.dyn_tau,
+                     rcmg_pre_weight=args.rcmg_pre_weight,
+                     rankcal_weights_path=args.rankcal_weights or None,
+                     reachable_target_cache=args.reachable_target_cache or None,
                      floor_filter=args.floor_filter, tau=args.tau,
                      steps=args.steps, K=args.K, batch_windows=args.batch_windows,
                      train_windows=args.train_windows, eval_windows=args.eval_windows,

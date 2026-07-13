@@ -1,448 +1,263 @@
-# RC-GRPO — AAAI-2027 当前论文故事线
+# RC-GRPO：AAAI-2027 统一故事与证据合同
 
-> **单一叙事事实源。** 方法细节见 `method.md`，实验状态见 `experiments.md`。日期型草稿统一放 `tmp/experiments/` 或 `tmp/notes/`，不再把一次性 md 散落在 `docs/experiments/`。
+> 本文档是论文叙事、贡献、术语和证据状态的唯一事实源。Method 只写这里定义的方法，Experiments 只验证这里登记的主张。历史方案和负结果不得反向进入主线。
 
-## Title
+## 1. 一句话论点
 
-**RC-GRPO: Reconstruction-Calibrated Temporal Credit Assignment for Tokenized Video World Models**
+在 tokenized 视频世界模型的 RLVR 后训练中，verifiable reward 并不天然等于可靠学习信号：冻结 tokenizer-decoder 使 raw ground truth 超出策略可达输出空间，多步 rollout 又把一个 sequence-level score 广播给承担不同未来影响的 frame-token blocks。我们先定位 raw/reconstructed target 之间改变候选排序的残差交互，再检验 encoder reconstruction 是否为局部合理的可达目标，最后用 future-frame return 分配 block-level credit。
 
-中文暂译：**RC-GRPO：面向 Tokenized 视频世界模型的重建校准式时间信用分配**。
+英文工作句：
 
-标题含义：
+> Verifiable rewards are not automatically reliable learning signals for tokenized video world models. We align verification with the decoder-reachable output space and assign future-frame credit according to the reliability of group-relative rankings across rollout horizons.
 
-- **RC** = Reconstruction-Calibrated，指 single-step 诊断得到的 reachable-target / reconstruction-floor 校准。
-- **GRPO** = 沿用 group-relative policy optimization 框架，而不是提出通用 RL 优化器。
-- **Temporal Credit Assignment** = 多步视频 rollout 中 frame-block 级优势分配，是本文主方法贡献。
-- **Tokenized Video World Models** = 限定适用场景，避免被审成通用 GRPO 论文。
+## 2. 为什么这项工作有意义
 
-## 0. 当前判决
+RLVR-World 证明了视频世界模型可以把 decoded prediction 与真实帧之间的 MSE/LPIPS 直接作为 verifiable reward，并使用 GRPO 后训练。但视频分支与语言 RLVR 有两个结构差异：
 
-论文主线从“提出更好的 reward”改为：
+1. 策略并不直接输出像素，而是输出冻结 tokenizer 的离散 token，最终预测被限制在 decoder 的可达集合中；
+2. 多步世界模型不是生成一个不可分的答案，而是依次生成会互相影响的 future-frame token blocks。
 
-$$
-\boxed{\text{single-step verifier diagnosis/calibration} \rightarrow \text{multi-step temporal GRPO}}
-$$
+因此，视频 RLVR 的核心问题不是“还能加几个图像指标”，而是：
 
-单步不再作为主战场。它的角色是证明：tokenized video world model 的 post-decode verifier 会被 codec reconstruction floor 腐蚀，原始 RLVR reward 给 GRPO 的组内排序并不干净；RC reward calibration 是后续多步 GRPO 的校准输入。
+> GRPO 用来比较候选并分配梯度的排序，在策略可达空间中是否正确，在不同时间位置上是否同样可信？
 
-多步才是主菜。当前 multi-step pilot 显示：100-step final 会漂移或发散，但固定 step30 协议已经能给出稳定 final 读数。`RC + seq GRPO` 在 3/3 seed 上优于 raw 与 held-out official RLVR；temporal credit assignment 进一步改善 final-at-30。5-seed 终局显示 plain temporal-return 最稳定，temporal-gain 对 `seq_rc` 的 0–2 seed 有正向信号，但 5-seed head-to-head 不如 plain return。最新消融显示 horizon-aware KL 单独中性/略差，叠加 return 也无额外收益，因此 KL 不再作为贡献。
+如果这两个问题不解决，reward 数值可计算、可复现，仍可能把错误的相对偏好广播给大量 token。该问题直接影响 tokenized video prediction、world-model post-training，以及任何通过冻结 codec 后再计算 full-reference reward 的生成模型。
 
-已判负或降级的通用 GRPO 侧方案：
+## 3. 现有管线与两个缺口
 
-- Dr.GRPO / hard floor-filter：中性或变差。
-- Segmental / GP-SegGRPO：单步干净 residual 设计下无稳定收益。
-- Rank-label REAL-style VPO：5 seed 系统性低于 baseline。
-- GSPO：三臂同 sweep 中在 RC reward 上显著有害，flow $\Delta=-0.021,t=-2.96,0/5$，保真全线变差。
-
-因此本文不再讲“我们找到一个更好的通用 GRPO 变体”。新的可写结论是：
-
-> In tokenized video RLVR, single-step experiments identify verifier-side rank corruption, while multi-step rollouts expose a temporal credit-assignment and drift-control problem. Effective improvement must be video-structured: calibrated verifiable rewards plus temporal GRPO for frame-block credit assignment.
-
-## 1. 贡献重排
-
-### C1. Verifier floor diagnosis + RC calibration
-
-这条把原来的“地板理论”和“reward 设计”合并成一个贡献，避免看起来像两条 reward engineering。
-
-定义 codec reconstruction floor：
+给定 context-action 条件 $q=(s_{1:C},a_{1:H})$，策略采样 $G$ 条 future-token trajectories $o_i=(o_{i,1},\ldots,o_{i,H})$，decoder 给出 $\hat s_{i,h}=D(o_{i,h})$。RLVR-World 风格的逐帧 reward 为
 
 $$
-\phi_{\mathrm{tok}}^{(d)}
-=
-\mathbb E[d(D(E(s')),s')].
+R^{\mathrm{raw}}_{i,h}
+=-
+\left[
+\operatorname{MSE}(\hat s_{i,h},s_h')
++\operatorname{LPIPS}(\hat s_{i,h},s_h')
+\right].
 $$
 
-它是 tokenizer 往返造成的不可约残差，住在 decoder 后，不是预测误差本身。
+### 3.1 输出空间缺口：raw target 不可达
 
-核心机制：
-
-$$
-P_{\mathrm{flip}}
-=
-\frac{\arccos(\rho)}{\pi},
-$$
-
-其中 $\rho$ 是含地板 reward 与无地板参照之间的组内相关。已有证据：
-
-- LPIPS 上实测翻转率约 0.185，理论约 0.186。
-- 最新离线分析扩展到 pixel / MSE / faithful reward，920 windows × 16 candidates：
-  - pixel: $\rho=0.758$，实测 flip 0.186，理论 0.186。
-  - MSE: $\rho=0.770$，实测 flip 0.181，理论 0.184。
-  - a0faithful: $\rho=0.766$，实测 flip 0.182，理论 0.181。
-
-因此旧说法“增益与地板绝对幅度成正比”已经废弃。正确解释是：增益由组内排序腐蚀程度 $\rho$ / flip rate 决定。
-
-RC reward calibration 把 verifier target 从真实帧 $s'$ 改成 tokenizer 可达目标：
+真实帧 $s_h'$ 通常不严格属于冻结 decoder 的像素输出集合。即使策略预测了正确 token $E(s_h')$，它也只能得到
 
 $$
-\tilde{s}' = D(E(s')).
+\tilde s_h'=D(E(s_h'))\neq s_h'.
 $$
 
-单步主 reward：
+raw target 与 reachable target 的残差包含 group-constant 部分和 candidate-dependent interaction。前者会被 GRPO 去均值消除，后者可能改变候选顺序：
 
 $$
-R_i^{\mathrm{RC}}
-=
-z_G\big(-\mathrm{LPIPS}(\hat{s}'_i,\tilde{s}')\big)
-+
-0.10\,z_G(R_i^{\mathrm{dyn}}),
-$$
-
-动态残差：
-
-$$
-R_i^{\mathrm{dyn}}
-=
-\cos(\Delta z_i,\Delta z')
--0.25
-\left|
-\log
-\frac{\|\Delta z_i\|+\epsilon}{\|\Delta z'\|+\epsilon}
-\right|.
-$$
-
-已经验证的单步结论：
-
-- `pixel -> pixel_tok` 稳定修复 post-decode floor 带来的目标错位。
-- `pixel_tok_dyn` 是当前 fidelity-motion Pareto 点。
-- RC 显著减少 raw-GT perceptual reward 的灾难性发散。
-
-写作定位：这不是论文主菜，而是后续 temporal GRPO 的 verifier calibration substrate。
-
-### C2. Temporal GRPO for multi-step video rollouts
-
-多步视频预测不是一条普通序列。当前 GRPO 把整个 rollout 压成一个 scalar reward / scalar advantage：
-
-$$
-\mathcal L_{\mathrm{seq}}
-=
--\frac{1}{G}
-\sum_{i=1}^{G}
-A_i
-\sum_{t=1}^{T}
-\sum_{\tau\in\mathrm{frame}(t)}
-\log \pi_\theta(o_{i,t,\tau}).
-$$
-
-这会把第 2 帧、第 5 帧、第 8 帧的错误混到同一个优势里。视频 world model 是自条件的：
-
-$$
-\hat{s}_{t+1}\rightarrow \hat{s}_{t+2}\rightarrow \cdots \rightarrow \hat{s}_{t+T},
-$$
-
-早期小错误会通过后续自回归历史放大。因此 multi-step RLVR 需要 frame-block 级信用分配。
-
-Temporal GRPO 将优势单位从 rollout 改为 future frame：
-
-$$
-\mathcal L_{\mathrm{temp}}
-=
--\frac{1}{G}
-\sum_{i=1}^{G}
-\sum_{t=1}^{T}
-A_{i,t}
-\sum_{\tau\in\mathrm{frame}(t)}
-\log \pi_\theta(o_{i,t,\tau}).
-$$
-
-两种候选优势：
-
-帧独立：
-
-$$
-A_{i,t}
-=
-\frac{r_{i,t}-\mu_t}{\sigma_t+\epsilon}.
-$$
-
-Temporal return：
-
-$$
-G_{i,t}
-=
-\sum_{u=t}^{T}\beta^{u-t}r_{i,u},
+R^{\mathrm{raw}}_{i,h}=R^*_{i,h}+\eta_{i,h},
 \qquad
-A_{i,t}
+\eta_{i,h}-\eta_{j,h}\neq 0.
+$$
+
+GRPO 只消费组内相对优势，因此真正的故障不是 floor 均值，而是 pairwise rank corruption。
+
+### 3.2 时间信用缺口：sequence scalar 被广播给所有 token
+
+sequence-level GRPO 先把整段 rollout 的逐帧 reward 压成一个标量，再给所有 future tokens 同一个优势。这无法区分某个早期 frame block 对后续误差传播的责任，也无法表达不同 horizon reward 的可靠性差异。
+
+普通逐帧归一化也不够：它只奖励当前帧，切断了早期 token 对后续帧的延迟影响。现有 5-seed frame-only 对照显著差于 temporal return，说明有效结构不是“把 reward 切细”，而是“把未来质量回传给能够影响它的前序 block”。
+
+## 4. 统一原则：可靠排序驱动的时空校准
+
+论文不再组织成一个 reward trick 加一个 GRPO trick，而是沿一个原则展开：
+
+$$
+\boxed{
+\text{measure rank reliability}
+\rightarrow
+\text{align the verifier target}
+\rightarrow
+\text{assign temporally reliable credit}
+}
+$$
+
+## 5. 方法
+
+### 5.1 Reconstruction-Calibrated Verifier
+
+将 raw GT 投影到与策略输出相同的冻结 codec 可达空间：
+
+$$
+\tilde s_h'=D(E(s_h')).
+$$
+
+正式 verifier 保持最小双指标形式：
+
+$$
+R^{\mathrm{RC}}_{i,h}
+=-
+\left[
+\operatorname{MSE}(\hat s_{i,h},\tilde s_h')
++\operatorname{LPIPS}(\hat s_{i,h},\tilde s_h')
+\right].
+$$
+
+RC 不改变候选、policy、decoder 或最终 evaluator；所有 headline metrics 仍对 raw real frame $s_h'$ 计算。因此它不是把任务换简单，而是只校准训练 verifier 的比较空间。
+
+### 5.2 Temporal-Return GRPO
+
+对 frame block $t$，累计所有可能被它影响的 future-frame rewards：
+
+$$
+G_{i,t}^{\mathrm{TR}}
 =
-\frac{G_{i,t}-\mu_t}{\sigma_t+\epsilon}.
+\sum_{h=t}^{H}
+\gamma^{h-t}R^{\mathrm{RC}}_{i,h}.
 $$
 
-其中第一帧可没有直接 action-conditioned reward，但它会影响后续 rollout，因此在 return 版本里仍可通过未来 reward 得到信用。
-
-Temporal-gain return 是下一步待验证候选，借鉴 stepwise/gain credit assignment 的思想：视频 rollout 不只关心每一帧是否好，也关心误差是否继续放大。定义相邻帧 improvement：
+每个时间位置在同一 candidate group 内标准化：
 
 $$
-g_{i,t}=r_{i,t}-r_{i,t-1},
-$$
-
-并构造 shaped frame reward：
-
-$$
-\tilde r_{i,t}
+A_{i,t}^{\mathrm{TR}}
 =
-r_{i,t}+\alpha_{\mathrm{gain}}g_{i,t}.
+\frac{G_{i,t}^{\mathrm{TR}}-mu_t}
+{\sigma_t+\epsilon}.
 $$
 
-然后用同样的 temporal return：
+该优势只广播给第 $t$ 个 future-frame token block。KL anchor、采样器、world model 与 tokenizer 均保持原协议。
+
+### 5.3 已否定扩展：Rank-Reliable Temporal Return
+
+**状态：正式离线门控 RED，不进入训练和论文方法。** horizon reliability 虽非平坦，但正确权重相对 plain return 的 episode-bootstrap CI 跨零且 evaluator correlation 没有改善；reversed/shuffled 为负只证明门控有方向判别力，不能把 primary 的不显著正数包装成方法收益。
+
+Temporal Return 默认所有 horizon reward 同样可靠。为把 C1 的 rank diagnosis 与 C2 的 credit assignment 真正统一，在 calibration candidates 上使用 pre-decode token distance 作为诊断参照，估计每个 horizon 的相关性 $\rho_h$ 与翻转率：
 
 $$
-G^{\mathrm{gain}}_{i,t}
+\hat p_{\mathrm{flip},h}
 =
-\sum_{u=t}^{T}\beta^{u-t}\tilde r_{i,u},
+\frac{\arccos(\hat\rho_h)}{\pi}.
+$$
+
+定义 horizon reliability：
+
+$$
+w_h
+=
+\operatorname{clip}
+\left(1-2\hat p_{\mathrm{flip},h},0,1\right),
 \qquad
-A^{\mathrm{gain}}_{i,t}
+\bar w_h=\frac{w_h}{H^{-1}\sum_u w_u}.
+$$
+
+候选的 reliability-shaped return 为
+
+$$
+G_{i,t}^{\mathrm{RR}}
 =
-\frac{G^{\mathrm{gain}}_{i,t}-\mu_t}{\sigma_t+\epsilon}.
+\sum_{h=t}^{H}
+\gamma^{h-t}\bar w_h R^{\mathrm{RC}}_{i,h}.
 $$
 
-实现上第一帧直接 reward 仍按 RLVR-World multi-step convention 置零；gain 从有直接 reward 的帧开始计算，避免把人工零 reward 当作真实前一帧评价。
+$w_h$ 只由独立 calibration split 冻结，不由训练结果选择，也不对当前候选自适应。该形式有清楚的 pairwise sign-reliability 解释，但不是无偏策略梯度校正定理；它改变了 temporal objective，必须通过重放门控和 paired training 验证。
 
-写作定位：这是本文真正的 GRPO 侧方法贡献，针对 tokenized multi-step video world model 的 temporal credit assignment。
+若 $w_h$ 近似常数，GRPO 标准化会使该方法近似退化为 plain Temporal Return，分支应立即终止。
 
-### C2.1 与已有 GRPO credit-assignment 工作的关系
+## 6. 贡献结构
 
-本文不应声称“第一个发现 GRPO 需要细粒度 credit assignment”。更稳的定位是：
+### 6.1 当前已成立的两项贡献
 
-> Existing GRPO variants have recognized that uniform sequence-level credit can be too coarse. We instantiate this principle in tokenized video world models, where the natural credit unit is a predicted future frame and the reward is a calibrated full-reference verifier.
+**C1. Codec-Conditioned Rank Calibration（MRRT target gate 已通过）.** 发现 decoded verifier 的可达性失配，并升级为三段不可拆的校准框架：
+(a) **精确残差分解**（method.md §2.2）：对加权平方特征距离有恒等式 $R^{\mathrm{raw}}_i=R^{\mathrm{RC}}_i+2\langle u_i-\tilde v,e\rangle_W-\|e\|_W^2$——常数项被 GRPO 归一化精确消除，改变排序的只有候选相关交互项 $b_{ij}=2\langle u_i-u_j,e\rangle_W$。该恒等式定位差异来源，但不预设 $b_{ij}$ 全是噪声；local metric-projection gate 决定 encoder reconstruction 能否作为正式校准目标。
+(b) **训练前 Reachability Audit**（§3.2）：RIR 度量交互严重度，回答"当前 codec 是否需要校准"；诚实边界：只作 severity stratification，不作在线 gate 或 context 权重。
+(c) **跨 codec、跨 horizon 闭环验证**（§3.3，episode-cluster bootstrap）：rank disagreement 在 single-step CNN-FSQ（$\Delta\rho$ +0.0168，p=0.0075）与 multi-step compressive FSQ（$\Delta\rho$ +0.0145，p<5e-4；h2–7 逐层显著）同时降低；$\arccos(\rho)/\pi$ 仅作为已有统计关系的预测校验，不作为新理论；修复量随 RIR 四分位单调增强（Spearman +0.120 [+0.027,+0.202]，p=0.007）。downstream 由 paired training 承接（single-step 5-seed；multi-step 独立 RC 增益尚未成立）。
+(d) **Metric-Refined Reachable Target (MRRT)**：固定 8 个高残差 latent cells、2 轮合法 FSQ 相邻移动的 64-window gate 中，64/64 目标改善，mean/median/q05 relative gain 为 0.834%/0.770%/0.382%，平均只改变 0.601% token cells。两轮均用满，故该方法严格称为 fixed-budget metric refinement，而不是精确投影。收益主要来自 LPIPS（64/64），MSE 为 39/64；下一门为 `raw / encoder-RC / MRRT / matched-random legal move` 的同协议训练，评测统一对 raw GT。
+配套负空间（进边界不进贡献）：围绕校准 verifier 的 reward 构造五层系统证伪（等权融合/学习权重/面板扩展/在线约束/空间池化）——最小校准双指标 verifier 在此接口信息饱和。
 
-可借鉴但不能照搬的相近方向：
+**C2. Frame-block temporal-return credit assignment.** 将 multi-step video GRPO 的信用单位从整条 sequence 改为 future-frame token blocks，通过 reward-to-go 把后续预测质量分配给能够影响它的前序 block；截断 return 与 candidate-shuffled return 在保持同一 reward 边际分布时破坏 future-credit correspondence，用于区分真正的时间信用与一般重标度。正式训练必须使用与 RLVR-World/VERL 一致的 `low_var_kl`，旧线性 KL 结果只作探索性证据。
 
-- GRPO-$\lambda$ / eligibility-trace style work：关注 LLM reasoning 中 terminal reward 的 token-level credit assignment。
-- Stepwise / flow-model GRPO：关注生成轨迹中不同 generation steps 的 credit assignment 或 improvement shaping。
-- DAPO / token-level policy-gradient 系列：强调长序列 RL 中 token-level loss reduction 和采样效率。
+### 6.2 当前强化方向
 
-我们的区别：
+不再追求第三个 reward/GRPO 小变体。C1 已由 encoder-RC 升级为 fixed-budget MRRT，下一门是 matched-random control 与 downstream paired training；C2 的强化门是 temporal alignment：用官方 `low_var_kl`、完整 $2\times2$、截断 return 与 candidate-shuffled control 证明收益来自正确的 future-credit correspondence，而非 reward rescaling。
 
-1. reward 是逐帧 full-reference verifier：
-   $$
-   r_{i,t}=R(\hat{s}_{i,t},s_t).
-   $$
-2. credit 单元是 video frame block，而不是 LLM token 或 diffusion denoising step：
-   $$
-   A_{i,t}\sum_{\tau\in\mathrm{frame}(t)}\log\pi_\theta(o_{i,t,\tau}).
-   $$
-3. temporal GRPO 之前先接入 single-step 已验证的 reachable-target calibration：
-   $$
-   \tilde{s}_t=D(E(s_t)).
-   $$
+## 7. 当前证据
 
-因此写作时使用 “inspired by / adapts fine-grained GRPO credit assignment to tokenized video rollouts”，不要写 “first temporal credit assignment for GRPO”。
+| Claim | Evidence | Status |
+|---|---|---|
+| raw verifier 存在 candidate-dependent rank corruption | 5 generation repetitions、LPIPS/MSE/联合空间的 $\rho$/flip 闭环，理论误差 <0.005 | supported |
+| RC 降低同候选排序分歧 | 三个 reward spaces 均 5/5 repetitions 降低 flip | supported |
+| RC 改善多步 sequence GRPO | 固定 $n=10$ 仅 LPIPS 6/10，$p=0.346$；新增 seeds 仅 1/5 | not supported as an independent multi-step gain |
+| Temporal Return 优于 seq-RC | 旧线性 KL 下固定 $n=10$ LPIPS/LPIPS-last 均 9/10；需以官方 `low_var_kl` 同协议复核 | provisional |
+| return 结构必要 | frame-only 比 full return 差 LPIPS +0.0105，0/5，$t=+6.2$ | supported |
+| Temporal Return 改善运动/分布真实性 | dmotion 不支持，DINO-KID 变差 | rejected；不得主张 |
+| Rank-Reliable Return 有额外收益 | replay CI 跨零、$\Delta\rho\le0$ | rejected |
 
-### C2.2 参考文献使用策略
+## 8. 必须补齐的实验
 
-参考文献的目标不是把所有 GRPO 变体都铺开，而是支撑三件事：
+### P0：C1 local reachability gate
 
-1. **RLVR-world-model 基座**：用 RLVR-World、GRPO/DeepSeekMath、iVideoGPT、FSQ、RT-1/Open X-Embodiment 说明本文沿用的是 tokenized video world model + verifiable reward + group-relative policy optimization 的既有框架。
-2. **single-step diagnosis 的理论背景**：用 VQ-VAE/VQGAN/FSQ 和 perception-distortion tradeoff 支撑“tokenizer 往返重建误差是生成质量上界/地板”的直觉；用 LPIPS/SSIM/RAFT/FD-DINO/KID/PRDC 等只支撑评价指标，不把这些指标包装成方法贡献。
-3. **multi-step temporal GRPO 的定位**：引用 GRPO-$\lambda$、SPO、SD-GRPO、Stepwise-Flow-GRPO、OAR 等说明 coarse sequence-level advantage 的 credit assignment 问题已经被不同领域观察到；我们的贡献是把这个原则落到 tokenized video rollout，信用单元是 future-frame block，并且 reward 先经过 reachable-target calibration。
+固定 FSQ 邻域与搜索预算的 64-window gate 已 64/64 找到更优合法 code，否定 encoder target 的局部最优性。下一步缓存 MRRT 与同 Hamming、同候选位置池的 random legal target，比较 `raw / encoder-RC / MRRT / matched-random`；不得根据训练结果增加搜索轮数。
 
-写作时相关工作可以分三段：
+### P1：完整 $2\times2$ 因子对照
 
-- **World models and tokenized video prediction**：`ivideogpt`, `genie`, `dreamerv3`, `rt1`, `openxembodiment`。
-- **RLVR / GRPO post-training**：`rlvrworld`, `grpo`, `deepseekr1`, `ppo`, `rloo`, `drgrpo`, `dapo`, `gspo`, `realrlvr`。
-- **Fine-grained credit assignment**：`grpolambda`, `spo`, `sdgrpo`, `stepwiseflowgrpo`, `oar`, `noiseawaregrpo`。
+现有矩阵缺少 `raw verifier + temporal return`。正式比较使用 seeds 0--9：
 
-审稿风险控制：
+| Verifier | Sequence advantage | Temporal return |
+|---|---|---|
+| raw | 已有 | **缺失** |
+| RC | 已有 | 已有 |
 
-- 不把 REAL/GSPO/SAPO/CISPO 写成我们必须全面对比的强 baseline。它们是 LLM/RLVR 优化器背景；我们只在负结果或相关工作中说明“直接替换通用 GRPO 目标没有解决 video reward/temporal structure 的问题”。
-- 不把 `flow` / `dmotion` 写成官方 RLVR metric。它们是我们为了动态一致性补充的 proxy；主表仍以 full-reference fidelity metrics 对齐 RLVR-World。
-- 不把 FD-DINO/KID/Precision-Recall/Density-Coverage 写成 per-sample reward。它们是集合/分布级 evaluator，只能服务评测或附录分析。
+该矩阵回答：Temporal Return 是否独立有效，RC 是否是 temporal credit 的必要 substrate，以及两者是否存在交互。没有它，不能写“两个模块互补”或“统一系统”。
 
-### C3. Temporal stabilization evidence and failed generic stabilizers
+### P2：Temporal correspondence controls
 
-Multi-step v3 的核心现象：
+比较 frame-only、$L\in\{1,3,\mathrm{full}\}$ 截断 returns 与 candidate-shuffled return；shuffled control 在每个 horizon 内独立置换候选身份，严格保持该 horizon 的 reward multiset 与归一化方式。只有 aligned/full return 随 credit horizon 增强且胜过 shuffled control，才能把收益归因于时间信用而非重标度。
 
-| readout | raw | RC | official RLVR |
-|---|---:|---:|---:|
-| final LPIPS | 0.3307 | 0.2797 | 0.2115 |
-| best LPIPS | 0.1992 | 0.1955 | 0.2115 |
+### P3：长度泛化
 
-判读：
+若固定 $n=10$ 支持 Temporal Return，再用 paired 3 seeds 比较 $T\in\{4,6,8\}$ 的 seq-RC/return-RC。目标不是挑最佳 $T$，而是检验 temporal credit 的相对收益是否随 rollout horizon 增长。
 
-- step 20--30 已经学到有效预测。
-- best checkpoint 3/3 seed 优于 official held-out RLVR。
-- 100-step final 仍漂移或发散。
+## 9. 负结果如何进入论文
 
-这说明多步问题不是“学不到”，而是“后期自回归漂移失控”。我们测试了 horizon-aware KL：
+负结果只服务边界，不作为独立贡献：
 
-$$
-\mathcal L
-=
-\mathcal L_{\mathrm{temp}}
-+
-\lambda_{\mathrm{KL}}
-\sum_{t=1}^{T}
-w_t
-\mathrm{KL}\big(
-\pi_\theta(\cdot|h_t)
-\Vert
-\pi_{\mathrm{ref}}(\cdot|h_t)
-\big),
-$$
+- 多指标静态融合、learned fusion、pre-decode code/gradient：未超过最小 RC verifier；
+- adaptive Rank-Guard：离线可预测但训练全线变差；
+- local-floor spatial pooling：预注册主配置 RED；只否定该权重族，不关闭空间轴；
+- Dr.GRPO、REAL-style VPO、GSPO、segmental variants：未超过 vanilla GRPO；
+- gain shaping 与 horizon-aware KL：未超过 plain Temporal Return；
+- distributional metrics：full-reference RLVR 的 fidelity gain 伴随 DINO distributional cost。
 
-其中：
+正文只保留与主张直接相关的三类负证：minimal verifier saturation、frame-only temporal ablation、distributional boundary。其余进入 appendix 或不写。
 
-$$
-w_t = 1 + \alpha\frac{t-1}{T-1}.
-$$
+## 10. 安全主张与禁区
 
-step30 fixed protocol 的最新结果：
+### 可以写
 
-| arm | final LPIPS | LPIPS-last | official final win |
-|---|---:|---:|---:|
-| seq raw | 0.2115 ± 0.0060 | 0.2309 ± 0.0196 | 2/3 |
-| seq RC | 0.2009 ± 0.0042 | 0.2096 ± 0.0046 | 5/5 |
-| return RC, uniform KL | 0.1980 ± 0.0034 | 0.2055 ± 0.0026 | 5/5 |
-| gain-return RC, uniform KL | 0.1989 ± 0.0070 | 0.2072 ± 0.0068 | 5/5 |
-| seq RC + horizon KL | 0.2005 ± 0.0059 | 0.2117 ± 0.0087 | 3/3 |
-| return RC + horizon KL | 0.1977 ± 0.0012 | 0.2064 ± 0.0014 | 3/3 |
+- Tokenizer target mismatch changes group-relative rankings through candidate-dependent residual interactions; cross-codec audits identify the subset consistent with corruption.
+- Replacing raw GT with the encoder-induced reconstruction aligns both sides of the verifier to decoder outputs, but is not called a metric projection until the local-reachability gate passes.
+- Frame-block temporal returns improve held-out full-reference LPIPS under the fixed RT-1 protocol at fixed $n=10$.
+- Extra reward components and generic optimizer substitutions did not improve this setting.
 
-写作定位：horizon-aware KL 不是正贡献。真正保留的是 temporal credit assignment：它把 rollout-level scalar advantage 改成 frame-block return advantage。Plain temporal-return 是最终多步 GRPO 主线，final LPIPS 0.1980 ± 0.0034，5/5 优于 official；相对 `seq_rc` 的 5-seed 配对 final LPIPS $\Delta=-0.0029$、LPIPS-last $\Delta=-0.0041$，均为 4/5 wins。per-horizon 分析显示该优势从 h=2 的 -0.0016 增长到 h=7 的 -0.0041，并且在 MSE/MAE/PSNR/SSIM 上方向一致；但 `dmotion` 不支持动态改进，因此本文只主张多步 full-reference fidelity 改善，不主张动态指标提升。
+### 不能写
 
-## 2. 当前不能主张的内容
+- reconstruction floor 的绝对均值直接导致 GRPO 失败；
+- RC 对所有 tokenizer、数据集和 metric 普遍更好；
+- Temporal Return 是通用或原创的 reward-to-go 理论；
+- 方法改善 motion、diversity 或 distributional realism；
+- 负结果证明整个 reward/空间/GRPO 设计空间已经关闭；
+- Rank-Reliable Return 在门控和训练前已经是贡献。
 
-不能写：
+## 11. 标题策略
 
-- code reward 更好。
-- feature reward 更好。
-- 我们提出了更好的通用 GRPO。
-- GSPO / REAL / segmental 只是没调好。
-- 增益与地板绝对幅度成正比。
-- 多步完整训练设置击败官方 RLVR。
+当前安全标题：
 
-可以写：
+> **RC-GRPO: Reconstruction-Calibrated Temporal Credit Assignment for Tokenized Video World Models**
 
-- 单步实验揭示 verifier-side rank corruption，并验证 RC 能修复目标错位。
-- 原始 vanilla GRPO 在单步上已经是强基座，继续换通用优化器无稳定收益。
-- 多步 under held-out protocol 的 step30 final 明显优于 official RLVR；100-step 长训仍存在 drift limitation。
+只有 C3 验证成功后才考虑：
 
-## 3. 下一步实验顺序
+> **RC-GRPO: Rank-Reliable Temporal Credit for Tokenized Video World Models**
 
-### P0. 固定早停多步 sanity check
+后者更统一，但在 C3 未成立时不可使用。
 
-已完成，step30 final 稳定。历史命令：
-
-```bash
-steps=30, eval_every=10, kl=0.001, raw/rc × seeds 0,1,2
-```
-
-读数：final-at-30，不再用 best checkpoint。判决：`seq RC` final LPIPS 0.1997 ± 0.0051，3/3 seed 优于 official RLVR。
-
-### P1. Temporal GRPO pilot
-
-在 `scripts/train_grpo_msp.py` 中新增：
-
-- `--adv_temporal seq|frame|return`
-- `--temporal_gamma`
-- `--horizon_kl_alpha`
-
-最小三臂：
-
-```bash
-# baseline
---adv_temporal seq --rewards raw,rc --seeds 0,1,2
-
-# method
---adv_temporal return --rewards rc --seeds 0,1,2
-
-# ablation
---adv_temporal frame --rewards rc --seeds 0,1,2
-```
-
-当前结果：
-
-- `return_hkl00` 相比 `seq RC`：final LPIPS 均值 $\Delta=-0.0029$，4/5 wins；LPIPS-last $\Delta=-0.0041$，4/5 wins。
-- per-horizon full-reference gains grow with horizon: LPIPS h=2:-0.0016 → h=7:-0.0041; MSE h=2:+0.00001 → h=7:-0.00057; PSNR h=2:+0.044 → h=7:+0.235; SSIM h=2:+0.0012 → h=7:+0.0050.
-- `dmotion` is not improved (aggregated $\Delta=-0.00111$, 14/30 wins), so dynamic improvement is not claimed.
-- `gain_return` 相比 `seq RC` on shared seeds 0–2：final LPIPS $\Delta=-0.0036$，3/3 wins；LPIPS-last $\Delta=-0.0046$，3/3 wins。
-- `gain_return` 相比 `return_hkl00` on seeds 0–4：final LPIPS $\Delta=+0.0009$，1/5 wins；LPIPS-last $\Delta=+0.0017$，2/5 wins。不能升级为最终冠军。
-- `seq_hkl05` 相比 `seq RC`：final LPIPS $\Delta=+0.0008$，1/3 wins，horizon KL 单独不成立。
-- `return_hkl05` 相比 `return_hkl00`：final LPIPS $\Delta=+0.0008$，1/3 wins，叠加 KL 也无收益。
-- n=3 下不能作显著性主张。
-- `gain_return` 是正向但不稳定候选，当前主线保留 plain temporal-return 作为最稳定配置。
-
-后续若要把 C2 写成强贡献，判据：
-
-- final 不发散。
-- final LPIPS / LPIPS-last 优于 official RLVR。
-- `gain_return >= return > seq`，或至少 `return > seq`。
-- `rc + return` 优于 `raw + return`，说明 RC 是必要 substrate。
-
-### P2. 若 P1 成功
-
-论文主结果改为：
-
-1. single-step verifier diagnosis；
-2. multi-step temporal GRPO final improvement；
-3. intervention-locus negative results 解释为什么通用 GRPO 变体无效。
-
-### P3. 若 P1 失败
-
-多步降级为 limitation，主线回到：
-
-1. verifier floor mechanism；
-2. RC calibration；
-3. GRPO-side systematic negative evidence。
-
-但这种形态的顶会风险会明显更高。
-
-## 4. 后续工作流程规则
-
-1. 任何新实验或代码改动：先改总文档，再改代码。
-2. 日期型草稿和一次性分析放 `tmp/experiments/` 或 `tmp/notes/`。
-3. `docs/aaai2027/story.md`、`docs/aaai2027/method.md`、`docs/aaai2027/experiments.md` 只保留当前事实源。
-4. 每次代码改动后必须做 code review：
-   - 看 diff 是否只改目标区域。
-   - 做 `py_compile` 或轻量 smoke。
-   - 写清楚是否同步服务器。
-
-## 5. 审稿人风险与下一轮设计
-
-### R1. “Reward calibration 只是 reward engineering”
-
-应对：C1+C2 合并成一个贡献，不拆开讲。单步部分只承担 verifier diagnosis：
-
-$$
-\text{codec floor}\rightarrow \text{rank flip}\rightarrow \text{reachable-target calibration}.
-$$
-
-它不是主菜；主菜放在 multi-step temporal GRPO。
-
-### R2. “Temporal-return GRPO 是不是只因为 early stopping”
-
-当前 step30 protocol 是合理但敏感的。必须明确：
-
-- 100-step long training 暴露 drift limitation；
-- step30 是固定、预先锁定的 final-at-step readout，不使用 best checkpoint；
-- 所有比较使用相同 held-out windows 和相同 step30。
-
-下一轮最关键的补强不是继续调 step，而是给出 longer-horizon / longer-training stability 证据。
-
-### R3. “Temporal credit assignment 的归因还不够”
-
-当前已证：
-
-- `seq RC` 优于 raw，说明 verifier calibration transfers to multi-step；
-- `return RC` 5/5 优于 official，且比 gain 更稳；
-- gain/horizon-KL 不支持升级为主方法。
-
-缺口：
-
-- `seq_rc` 只有 seeds 0--2；若要对 `return_hkl00` 做 5-seed 配对显著性，需补 `seq_rc` seeds 3,4。
-- 缺少 per-horizon 读数表，不能证明 temporal-return 特别改善后期帧。
-
-### R4. “只看 LPIPS/MSE，不够视频世界模型”
-
-必须补至少一个 temporal / distribution readout：
-
-- per-horizon LPIPS/MSE 曲线：$h=2,\ldots,T$；
-- final-frame LPIPS-last 已有，但需要整理成曲线；
-- 若时间允许，补 FD-DINO/KID 或 flow/dmotion on multi-step final checkpoints。
-
-### 下一轮最小实验
-
-P0：补 `seq_rc` seeds 3,4，形成 `seq_rc` vs `return_hkl00` 的 5-seed 配对。
-
-P1：离线分析已有 checkpoints 的 per-horizon metrics，不训练。目标是证明 return GRPO 的收益集中在中后段 horizon，而不是随机均值波动。
-
-P2：若 P0/P1 成立，停止方法搜索，进入写作和图表阶段。若 P0 不成立，则 temporal-return 降级为 stability refinement，主线改成 RC multi-step transfer + limitations。
+## 12. 文档规则
+
+- `story.md`：唯一论点与证据状态；
+- `method.md`：可复现公式，pending 方法必须显式标记；
+- `experiments.md`：结果事实、统计和实验合同；
+- `RUN.md`：仅保留当前实验命令；
+- `introduction.md / related_work.md / preliminaries.md`：中文正式写作稿；
+- `reviewer_audit.md`：投稿前反方审查；
+- 过期策略、日期型状态稿和失败方案移入 `_archive/`，不得与 canonical docs 并列。

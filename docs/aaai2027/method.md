@@ -1,368 +1,276 @@
-# Method — Temporal RC-GRPO
+# Method 中文工作稿
 
-> **当前主线**：单步实验负责 verifier floor diagnosis 和 RC calibration；多步实验负责 GRPO 侧创新，即 temporal credit assignment 与 horizon-aware drift control。  
-> **不再作为主方法**：GSPO、REAL-style VPO、segmental single-step GRPO、codec_fused/CAST 旧路线均作为 intervention-locus 负结果或历史记录，不再写成本文方法。
+> 与 `story.md` 同步。正式 Method 当前包含 RC verifier 与 Temporal-Return GRPO；Rank-Reliable Return 为预注册候选扩展，只有实验绿灯后才进入 tex。
 
-## 1. RLVR-World 骨架
+## 1. Problem Formulation
 
-给定 context/action：
-
-$$
-q=(s,a),
-$$
-
-视频世界模型对同一转移采样一组候选 token 序列：
+给定 $C$ 帧 context $s_{1:C}$ 和动作序列 $a_{1:H}$，tokenized video world model $\pi_\theta$ 自回归生成 $H$ 个 future-frame token blocks：
 
 $$
-\hat{z}_{i,1:H}\sim\pi_{\theta}(\cdot\mid q),\qquad i=1,\ldots,G.
+o_i=(o_{i,1},\ldots,o_{i,H}),
+\qquad o_i\sim\pi_\theta(\cdot\mid s_{1:C},a_{1:H}),
 $$
 
-候选经 decoder 得到预测帧：
+其中 $i\in\{1,\ldots,G\}$ 表示同一条件下的 candidate trajectory。冻结 tokenizer $E$ 与 decoder $D$ 将 token block 解码为
 
 $$
-\hat{s}'_i = D(\hat{z}_i).
+\hat s_{i,h}=D(o_{i,h}).
 $$
 
-RLVR-World 的 verifier 对每个候选给出可验证 reward：
+RLVR 使用与真实 future frame $s_h'$ 的 full-reference distance 构造 reward，并由 GRPO 的组内相对优势更新策略。本文保持数据、world model、tokenizer、采样器和 KL anchor 不变，只研究 verifier target 与 temporal credit assignment。
+
+## 2. Reconstruction-Induced Rank Corruption
+
+### 2.1 Decoder-reachable output set
+
+冻结 decoder 的输出受限于
 
 $$
-R_i = R(\hat{s}'_i,s'),
+\mathcal S_D=\{D(z):z\in\mathcal Z\}.
 $$
 
-然后 GRPO 使用组内归一化优势：
+raw ground truth $s_h'$ 通常不严格属于 $\mathcal S_D$。即使策略预测 ground-truth token $E(s_h')$，其可达到的像素目标仍是
 
 $$
-A_i=\frac{R_i-\mu_R}{\sigma_R+\epsilon}.
+\tilde s_h'=D(E(s_h')).
 $$
 
-本文不改变 RLVR-World 的基本骨架：仍然是 sample group、verifiable reward、group-relative policy update。改动发生在两个位置：
-
-1. single-step：校准 verifier target；
-2. multi-step：把 rollout-level advantage 改成 temporal frame-block advantage。
-
-## 2. Single-Step Verifier Calibration
-
-### 2.1 Codec Reconstruction Floor
-
-tokenizer 往返会产生不可约重建残差：
+定义 reconstruction residual：
 
 $$
-\phi_{\mathrm{tok}}^{(d)}
-=
-\mathbb{E}_{s'}[d(D(E(s')),s')].
+e_h=s_h'-\tilde s_h'.
 $$
 
-它不是模型预测错误，而是 decoder / tokenizer 对真实帧本身的不可达误差。post-decode reward 如 LPIPS、MSE、SSIM、DINO feature distance 都会看到这个 floor；pre-decode code-space reward 不经过 decoder，因此没有同一类 floor。
+### 2.2 GRPO-relevant failure mode（C1-a：精确残差分解，2026-07-12 定稿）
 
-GRPO 只消费组内排序。若含 floor 的 reward 与无 floor 参照的组内相关为 $\rho$，排序翻转概率满足：
-
-$$
-P_{\mathrm{flip}}
-=
-\frac{\arccos(\rho)}{\pi}.
-$$
-
-这一定律已在多个 reward 上离线验证，因此 single-step 的主要作用是诊断 verifier-side rank corruption。
-
-### 2.2 Reachable-Target Calibration
-
-真实帧 $s'$ 不一定是 tokenizer 可达的 decoded frame。我们把 verifier target 改为：
+对 MSE 与 LPIPS 这类加权平方特征距离（MSE 取 $\phi=\mathrm{id}$；LPIPS 为逐层线性加权的
+平方特征距离，分解逐层成立），令
 
 $$
-\tilde{s}' = D(E(s')).
+u_i=\phi(\hat s_i),\quad v=\phi(s'),\quad \tilde v=\phi(D(E(s'))),\quad e=v-\tilde v,
 $$
 
-RC reward：
+则 raw 与 RC verifier 之间是**精确恒等**而非近似：
 
 $$
-R_i^{\mathrm{RC}}
-=
-z_G\big(-\mathrm{LPIPS}(\hat{s}'_i,\tilde{s}')\big)
-+
-\lambda_{\mathrm{dyn}}z_G(R_i^{\mathrm{dyn}}),
+R_i^{\mathrm{raw}}=-\|u_i-v\|_W^2
+= R_i^{\mathrm{RC}} + 2\langle u_i-\tilde v,\,e\rangle_W - \|e\|_W^2 .
 $$
 
-其中当前冻结：
+对候选对 $(i,j)$：
 
 $$
-\lambda_{\mathrm{dyn}}=0.10.
+\Delta R_{ij}^{\mathrm{raw}} = \Delta R_{ij}^{\mathrm{RC}} + b_{ij},
+\qquad b_{ij} = 2\langle u_i-u_j,\,e\rangle_W .
 $$
 
-动态残差：
+$-\|e\|_W^2$ 是组内常数，被 GRPO 去均值精确消除；**唯一能改变组内排序的是候选相关交互项
+$b_{ij}$**。恒等式本身只证明 raw 与 RC 的排序差异来自哪里，并不自动证明 $b_{ij}$ 全是噪声：
+某些 alternative token sequence 可能借助该交互更接近 raw GT。本文因此把现象保守地称为
+reconstruction-induced rank disagreement；只有经过独立参照、局部可达性和训练结果验证后，
+才把被 RC 修复的部分解释为 rank corruption。
+
+在二元高斯近似下，若含扰动 reward 与诊断参照的相关系数为 $\rho$，pairwise sign disagreement 为
 
 $$
-R_i^{\mathrm{dyn}}
-=
-\cos(\Delta z_i,\Delta z')
--
-\gamma_{\mathrm{dyn}}
-\left|
-\log
-\frac{\|\Delta z_i\|+\epsilon}{\|\Delta z'\|+\epsilon}
-\right|,
-\qquad
-\gamma_{\mathrm{dyn}}=0.25.
+p_{\mathrm{flip}}=\frac{\arccos(\rho)}{\pi}.
 $$
 
-这里 $z_i$ 是候选 code，$z'$ 是 GT code，$\Delta z_i=z_i-z_t$，$\Delta z'=z'-z_t$。
+该关系是已有相关高斯符号关系；本文贡献是将其操作化为 tokenized video verifier 的诊断，并通过同候选 raw/RC 重评分闭环验证。
 
-### 2.3 Single-Step Loss
+## 3. Reconstruction-Calibrated Verifier
 
-单步仍使用 vanilla GRPO：
-
-$$
-\mathcal{L}_{\mathrm{1step}}
-=
--\frac{1}{G}
-\sum_{i=1}^{G}
-A_i
-\sum_{\tau}
-\log\pi_\theta(o_{i,\tau}\mid q,o_{i,<\tau}).
-$$
-
-其中：
+RC 使用冻结 codec 的 encoder-induced reachable reconstruction：
 
 $$
-A_i=
-\frac{R_i^{\mathrm{RC}}-\mu_R}{\sigma_R+\epsilon}.
+\tilde s_h'=D(E(s_h')).
 $$
 
-单步不是本文最终算法创新的主战场；它证明 verifier 校准必要，并提供多步训练的 calibrated reward substrate。
-
-## 3. Multi-Step Temporal GRPO
-
-### 3.1 问题：Sequence-Level Advantage 太粗
-
-multi-step rollout 生成 $F$ 个 future frames，每帧有一组 dynamics tokens：
+逐帧 reward 为
 
 $$
-o_i=\{o_{i,t,\tau}:t=1,\ldots,F,\tau=1,\ldots,N\}.
-$$
-
-当前 lean multi-step GRPO 把所有帧的 reward 平均成一个 scalar：
-
-$$
-R_i=\frac{1}{F-1}\sum_{t=2}^{F} r_{i,t},
-$$
-
-再广播到整条 rollout：
-
-$$
-\mathcal{L}_{\mathrm{seq}}
-=
--\frac{1}{G}
-\sum_{i=1}^{G}
-A_i
-\sum_{t=1}^{F}
-\sum_{\tau=1}^{N}
-\log\pi_\theta(o_{i,t,\tau}).
-$$
-
-这忽略了视频 rollout 的自条件结构：早期 token 会影响后续帧，后期错误也不应反向等价地惩罚所有 token。
-
-### 3.2 Per-Frame Verifiable Reward
-
-对每个候选、每个 future frame 计算 frame-level reward：
-
-raw：
-
-$$
-r_{i,t}^{\mathrm{raw}}
-=
--\left[
-\mathrm{MSE}(\hat{s}_{i,t},s_t)
-+
-\mathrm{LPIPS}(\hat{s}_{i,t},s_t)
-\right].
-$$
-
-RC：
-
-$$
-r_{i,t}^{\mathrm{RC}}
-=
--\left[
-\mathrm{MSE}(\hat{s}_{i,t},\tilde{s}_t)
-+
-\mathrm{LPIPS}(\hat{s}_{i,t},\tilde{s}_t)
-\right],
-\qquad
-\tilde{s}_t=D(E(s_t)).
-$$
-
-沿用 RLVR-World multi-step convention：第一个 future frame 不作为直接 reward frame，因为它没有对应的 action-conditioned transition reward。但在 temporal-return 版本中，它仍可通过后续 rewards 获得信用。
-
-### 3.3 Temporal Advantage
-
-三种模式：
-
-**seq baseline**：
-
-$$
-A_i^{\mathrm{seq}}
-=
-\frac{\bar r_i-\mu}{\sigma+\epsilon},
-\qquad
-\bar r_i=\frac{1}{F-1}\sum_{t=2}^{F}r_{i,t}.
-$$
-
-**frame advantage**：
-
-$$
-A_{i,t}^{\mathrm{frame}}
-=
-\frac{r_{i,t}-\mu_t}{\sigma_t+\epsilon}.
-$$
-
-第一个 future frame 的 direct frame advantage 置零。
-
-**temporal-return advantage**：
-
-$$
-G_{i,t}
-=
-\sum_{u=\max(t,2)}^{F}
-\beta^{u-t}r_{i,u},
-$$
-
-$$
-A_{i,t}^{\mathrm{return}}
-=
-\frac{G_{i,t}-\mu_t}{\sigma_t+\epsilon}.
-$$
-
-其中 $\beta$ 是 temporal discount。return 模式允许早期生成 token 因后续 rollout 好坏获得 credit，更适合自回归视频世界模型。
-
-**temporal-gain return advantage**：
-
-视频 rollout 的另一个风险是误差沿 horizon 继续放大。借鉴 stepwise/gain credit assignment 的思想，我们测试一个只作为 opt-in 候选的 gain shaping：
-
-$$
-g_{i,t}=r_{i,t}-r_{i,t-1},
-\qquad
-\tilde r_{i,t}=r_{i,t}+\alpha_{\mathrm{gain}}g_{i,t}.
-$$
-
-随后对 $\tilde r$ 做 temporal return：
-
-$$
-G^{\mathrm{gain}}_{i,t}
-=
-\sum_{u=\max(t,2)}^{F}
-\beta^{u-t}\tilde r_{i,u},
-\qquad
-A_{i,t}^{\mathrm{gain}}
-=
-\frac{G^{\mathrm{gain}}_{i,t}-\mu_t}{\sigma_t+\epsilon}.
-$$
-
-实现约定：第一个 future frame 没有直接 action-conditioned reward，仍置零；gain 从第二个有直接 reward 的 frame 开始计算，避免把人工零 reward 当作真实评价。若 `gain_return` 不优于 `return`，它作为负消融归档，不进入主方法。
-
-### 3.4 Temporal GRPO Objective
-
-Temporal GRPO loss：
-
-$$
-\mathcal{L}_{\mathrm{temp}}
-=
--\frac{1}{G}
-\sum_{i=1}^{G}
-\sum_{t=1}^{F}
-A_{i,t}
-\sum_{\tau=1}^{N}
-\log\pi_\theta(o_{i,t,\tau}\mid h_{i,t,\tau}).
-$$
-
-当 `adv_temporal=seq` 时，退化为旧 multi-step GRPO。  
-当 `adv_temporal=frame` 时，每个 frame 独立归一化。  
-当 `adv_temporal=return` 时，用后续 reward 的折扣回报做 frame-block credit assignment。
-当 `adv_temporal=gain_return` 时，先用相邻帧 reward improvement 做 video-specific shaping，再计算 temporal return。
-
-### 3.5 Horizon-Aware KL
-
-多步 v3 显示：模型早期学得好，但长训 final 漂移。为抑制自回归 rollout 后期漂移，引入 horizon-aware KL：
-
-$$
-\mathcal{L}
-=
-\mathcal{L}_{\mathrm{temp}}
-+
-\lambda_{\mathrm{KL}}
-\frac{1}{GFN}
-\sum_{i,t,\tau}
-w_t
+R^{\mathrm{RC}}_{i,h}
+=-
 \left[
-\log\pi_\theta(o_{i,t,\tau})
--
-\log\pi_{\mathrm{ref}}(o_{i,t,\tau})
+\operatorname{MSE}(\hat s_{i,h},\tilde s_h')
++\operatorname{LPIPS}(\hat s_{i,h},\tilde s_h')
 \right].
 $$
 
-其中：
+两个距离沿用 RLVR-World 的等权口径，不加入 code、SSIM 或 learned fusion。候选和 target 均由同一冻结 decoder 产生，但最终 evaluator 仍计算 $d(\hat s_{i,h},s_h')$。
+
+这里不把 $D(E(s'))$ 称为度量投影。一般情况下，encoder 并不求解
 
 $$
-w_t = 1 + \alpha_{\mathrm{horizon}}\frac{t-1}{F-1}.
+\arg\min_{z\in\mathcal Z} d(D(z),s'),
 $$
 
-若 $\alpha_{\mathrm{horizon}}=0$，退化为普通均匀 KL；若 $\lambda_{\mathrm{KL}}=0$，关闭 KL。
+因此附近 token code 可能解码得比 $E(s')$ 更接近 raw GT。该区别构成 C1 的首要可证伪门。
 
-注意：这里使用 sampled-token log-prob difference 作为 lightweight KL surrogate，与当前 harness 的实现风格一致。正式论文表述中应写作 KL regularization / reference-policy anchor，并在实现细节说明为 sampled-token estimate。
+### 3.1 设计边界
 
-## 4. 负结果的定位
+RC 适用于：策略输出受冻结 tokenizer-decoder 约束，并使用 decoded full-reference verifier 的设置。以下情况不由本文覆盖：直接像素生成、近无损 tokenizer、联合训练 decoder、纯 pre-decode reward，或没有可测 rank corruption 的场景。
 
-以下方法不再作为主方法：
+### 3.2 C1-b：训练前 Reachability Audit（RIR）
 
-| 类别 | 方法 | 当前判决 |
-|---|---|---|
-| scalar advantage | Dr.GRPO / hard floor-filter | 中性或更差 |
-| reward fusion | dorw / codec_fused | 塌缩或伤保真 |
-| single-step credit assignment | segmental / GP-SegGRPO | 无稳定收益 |
-| objective | REAL-style rank-label VPO | 系统性变差 |
-| optimization geometry | GSPO | 显著有害 |
+组级 residual-interaction ratio：
 
-它们作为 intervention-locus study：说明通用 GRPO 侧替换不能解决 tokenized video RLVR 的 verifier-floor 和 temporal-drift 问题。
+$$
+\mathrm{RIR}(q)=\frac{\operatorname{Std}_i\!\left(R_i^{\mathrm{raw}}-R_i^{\mathrm{RC}}\right)}
+{\operatorname{Std}_i\!\left(R_i^{\mathrm{RC}}\right)+\epsilon}.
+$$
 
-## 5. 最小实验协议
+分子只保留 $b$ 的候选相关部分（常数 $-\|e\|^2$ 被 Std 消除），故 RIR 直接度量"交互项相对
+真实信号有多大"。用途是训练前诊断：raw/RC 差异是否只是常数、交互是否足以改变排序、当前
+codec 是否需要校准、RC 修复量是否随 severity 增强。**诚实边界（预注册）**：RIR 的
+context 级分类能力弱，只作 severity stratification，不作在线 gate、不作 context 权重——
+floor-filter 与 Rank-Guard 的失败已证明把弱预测量升格为在线干预的后果。
 
-### 5.1 Step-30 Multi-Step Sanity
+### 3.3 C1-c：跨 codec、跨 horizon 验证（2026-07-12 实测，episode-cluster bootstrap 2000）
 
-不改算法，确认 early training 是否可稳定作为 final-at-30：
+零训练审计，`scripts/audit_rank_calibration.py`，聚类单位=episode（组间非独立）：
 
-```bash
-python scripts/train_grpo_msp.py \
-  --rewards raw,rc \
-  --seeds 0,1,2 \
-  --steps 30 --K 16 --T 8 \
-  --batch_windows 2 \
-  --kl 0.001 \
-  --eval_windows 8 \
-  --eval_every 10 \
-  --deterministic \
-  --out_dir outputs/msp_pilot_step30
-```
+| 层 | groups | $\rho$ raw→RC | $\Delta\rho$ [95% CI] | boot-p | flip raw→RC | $\Delta p_{\mathrm{flip}}$ | boot-p |
+|---|---:|---|---|---|---|---|---|
+| single-step CNN-FSQ（148 窗） | 148 | 0.850→0.866 | +0.0168 [+0.0035,+0.0289] | 0.0075 | 0.155→0.147 | −0.0082 | 0.030 |
+| multi-step compressive FSQ（3 gen×64 窗×h2–7） | 1152 | 0.726→0.740 | +0.0145 [+0.0105,+0.0176] | <5e-4 | 0.234→0.225 | −0.0087 | <5e-4 |
 
-### 5.2 Temporal GRPO Pilot
+逐 horizon h=2..7 全部显著（$\Delta\rho$ +0.0117~+0.0182，$\Delta p_{\mathrm{flip}}$
+−0.0077~−0.0102，boot-p≤0.001）；$\arccos(\rho)/\pi$ 律在两种 codec、校准前后均吻合
+（平均偏差 ≈0.03）。RIR 四分位剂量响应（multi，pooled）：$\Delta\rho$ =
++0.0083/+0.0120/+0.0173/+0.0203 单调，cluster-boot Spearman(RIR, $\Delta\rho$) = +0.120
+[+0.027,+0.202]，p=0.007；single-step 趋势 +0.151（单侧 p=0.04，由最高分位驱动，
+按 3.2 边界只作 stratification 证据）。**结论：C1 不再依赖单一 tokenizer——rank repair
+在更强压缩的第二 codec 与全部 horizon 上成立，且修复量随 RIR severity 增强。**
 
-三臂：
+### 3.4 C1-d：Metric-Refined Reachable Target（64-window target gate 通过）
 
-```bash
-# old baseline
---adv_temporal seq --rewards raw,rc --seeds 0,1,2
+对每个 GT token grid $z_0=E(s')$，在固定预算的合法 FSQ 邻域 $\mathcal N_B(z_0)$ 中搜索
 
-# proposed
---adv_temporal return --rewards rc --seeds 0,1,2
+$$
+z_B=\operatorname{GreedyRefine}_B\left(z_0;d(D(z),s')\right),
+$$
 
-# candidate extension
---adv_temporal gain_return --gain_alpha 0.5 --rewards rc --seeds 0,1,2
+其中 $B=2$，每轮只在 reconstruction-error 最高的 8 个 latent cells 枚举所有合法一阶 FSQ
+邻居，并按与训练 verifier 相同的 $d=\mathrm{LPIPS}+\mathrm{MSE}$ 接受下降最大的移动。定义
+$\tilde s'_{\mathrm{MRRT}}=D(z_B)$。搜索未证明收敛，因此本文称其 metric-refined target，绝不写成
+全局或局部 $\arg\min$。
 
-# ablation
---adv_temporal frame --rewards rc --seeds 0,1,2
-```
+独立于正式训练窗口的 64-window gate 中，64/64 目标改善；mean/median/q05 relative objective
+gain 为 0.834%/0.770%/0.382%，平均 Hamming fraction 0.00601。LPIPS 在 64/64 下降，MSE
+在 39/64 下降，说明联合目标收益由实际尺度更大的 LPIPS 主导。所有窗口均接受 2/2 moves，
+明确否定 encoder reconstruction 的局部最优性，但也表明 MRRT 是 budgeted refinement。
 
-主判据：
+为排除任意 target preprocessing，matched-random control 从两轮实际枚举位置的同一并集执行相同
+token-cell Hamming 预算的随机合法移动。四臂为 raw GT、encoder-RC、MRRT 与 matched-random；
+held-out evaluation 始终对 raw GT，不使用 MRRT 自评。
 
-- final LPIPS / LPIPS-last 不发散；
-- final 优于 official multi-step RLVR held-out baseline；
-- `return > seq`；
-- `gain_return >= return` 才能升级为主方法，否则只作负消融；
-- `rc + return > raw + return`，证明 verifier calibration 与 temporal credit assignment 互补。
+## 4. Temporal-Return GRPO
+
+### 4.1 Sequence-level baseline
+
+sequence-level GRPO 将有效 future frames 的 reward 平均为
+
+$$
+\bar R_i=\frac{1}{H'}\sum_{h\in\mathcal H}R^{\mathrm{RC}}_{i,h},
+$$
+
+并将同一个标准化优势广播给整条 trajectory。它不能区分 frame block 对后续 prediction errors 的延迟作用。
+
+### 4.2 Frame-block reward-to-go
+
+对第 $t$ 个 future-frame token block，定义 discounted future return：
+
+$$
+G^{\mathrm{TR}}_{i,t}
+=
+\sum_{h=t}^{H}
+\gamma^{h-t}R^{\mathrm{RC}}_{i,h}.
+$$
+
+在每个时间位置独立做 group-relative normalization：
+
+$$
+A^{\mathrm{TR}}_{i,t}
+=
+\frac{G^{\mathrm{TR}}_{i,t}-\mu_t}
+{\sigma_t+\epsilon},
+$$
+
+$$
+\mu_t=\frac1G\sum_iG^{\mathrm{TR}}_{i,t},
+\qquad
+\sigma_t^2=\frac1G\sum_i(G^{\mathrm{TR}}_{i,t}-\mu_t)^2.
+$$
+
+$A^{\mathrm{TR}}_{i,t}$ 只作用于 $o_{i,t}$ 中的 visual tokens。当前多步协议跳过没有直接 action-conditioned reward 的第一个 future frame，但 later-frame return 仍可向其分配信用。
+
+### 4.3 Policy objective
+
+设 $\ell_{i,t}=\sum_{k\in o_{i,t}}\log\pi_\theta(o_{i,t,k}\mid o_{i,<t},q)$，训练目标为
+
+$$
+\mathcal L_{\mathrm{TR}}
+=-
+\frac1G\sum_{i=1}^{G}\sum_{t=1}^{H}
+A^{\mathrm{TR}}_{i,t}\ell_{i,t}
++\beta_{\mathrm{KL}}\mathcal L_{\mathrm{KL}}.
+$$
+
+我们保持 $\beta_{\mathrm{KL}}=0.001$ 与固定 base reference。正式实现采用 RLVR-World/VERL 视频
+配方的 sampled low-variance KL：令 $k=\log\pi_{\mathrm{ref}}-\log\pi_\theta$，逐 token penalty 为
+$\exp(k)-k-1$。早期多步结果误用了线性 $\log\pi_\theta-\log\pi_{\mathrm{ref}}$；由于每批 rollout
+只做一次 on-policy update，该形式不等价于官方 estimator。因此既有 C2 数字暂列探索性证据，
+必须使用修正实现做固定协议复核。horizon-aware KL 已实测无额外收益，不属于方法。
+
+## 5. Rejected Extension: Rank-Reliable Temporal Return
+
+> **Rejected：离线 replay gate 为 RED，不进入正式 Method/贡献；本节仅保留失败机制记录，Tex 应删除。**
+
+### 5.1 Horizon reliability calibration
+
+在与 train/eval 分离的 calibration episodes 上，对每个 horizon 构造：
+
+- RC reward $R^{\mathrm{RC}}_{i,h}$；
+- raw-GT evaluator，仅用于离线判决；
+- pre-decode token-distance diagnostic $R^{\mathrm{code}}_{i,h}$。
+
+估计同组相关 $\rho_h$，并通过 episode-cluster bootstrap 汇总：
+
+$$
+\hat p_{\mathrm{flip},h}=\frac{\arccos(\hat\rho_h)}{\pi},
+\qquad
+w_h=\operatorname{clip}(1-2\hat p_{\mathrm{flip},h},0,1).
+$$
+
+为保持平均 reward scale，对 horizon weights 归一化：
+
+$$
+\bar w_h=\frac{w_h}{H^{-1}\sum_u w_u}.
+$$
+
+### 5.2 Reliability-shaped return
+
+$$
+G^{\mathrm{RR}}_{i,t}
+=
+\sum_{h=t}^{H}
+\gamma^{h-t}\bar w_hR^{\mathrm{RC}}_{i,h},
+$$
+
+其余 group normalization 与 policy objective 不变。
+
+### 5.3 退化与负对照
+
+- $w_h$ 常数：退化为 plain Temporal Return；
+- shuffled $w_h$：检验收益是否来自 reliability 与 horizon 的正确对应；
+- reversed $w_h$：检验方向性；
+- code distance 只作 calibration diagnostic，不直接加入训练 reward。
+
+该权重把 pairwise sign reliability 映射为 horizon objective coefficient，是有解释的设计，但不是无偏 correction。若离线重放未通过，不实现训练分支。
+
+## 6. Implementation Contract
+
+固定设置：RT-1 `fractal20220817`、compressive FSQ tokenizer、Llama world model、HF sampling `top_k=100`、$G=16$、$T=8$、30 post-training steps、batch windows 2、KL 0.001。所有候选在 matched comparisons 中使用相同 model seed、window split 和 generation protocol。
+
+训练 reward 只使用 reachable-target MSE/LPIPS；raw-GT metrics、flow/dmotion、DINO-KID 和任何 distributional metric 均为 evaluation-only。

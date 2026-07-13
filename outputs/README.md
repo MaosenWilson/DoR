@@ -1,16 +1,13 @@
 # Outputs Directory
 
-Use this directory for generated experiment artifacts:
+Use this ignored directory for generated experiment artifacts. Current runs use:
 
 ```text
 outputs/
-  baseline_eval/
-  proxy_quality_analysis/
-  grpo_smoke_test/
-  visualizations/
-  logs/
-  reports/
+  mrrt/             MRRT target caches and four-arm single-step sweeps.
+  msp_lvkl_*/        Official-low-variance-KL multi-step factorial runs.
+  analysis/          JSON gates, paired analyses, and audited summaries.
+  ckpt/              Saved post-training checkpoints.
 ```
 
 Large generated files are ignored by git.
-

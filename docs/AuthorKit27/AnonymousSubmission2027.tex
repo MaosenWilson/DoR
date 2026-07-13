@@ -130,7 +130,7 @@
 \maketitle
 
 \begin{abstract}
-% Abstract will be written after the main sections are fixed.
+Verifiable reward post-training improves tokenized video world models by scoring groups of decoded candidate futures against ground-truth frames and reinforcing higher-reward candidates with GRPO. We identify two structural mismatches in this loop. First, the raw target is not exactly reachable through a lossy tokenizer--decoder pair, and its reconstruction residual can change the within-group ordering consumed by GRPO. Second, a sequence-level advantage assigns identical credit to all autoregressive future-frame token blocks. We propose RC-GRPO, which compares decoded candidates with the tokenizer-reachable target $D(E(s))$ and assigns group-normalized temporal-return advantages to individual future-frame blocks, while leaving the tokenizer, decoder, and group-relative update unchanged. Pairwise reward disagreements follow the closed-form prediction $\arccos(\rho)/\pi$, and rescoring identical candidate groups with the reachable target reduces the measured disagreement. Under a fixed held-out multi-step RT-1 protocol, reconstruction calibration lowers final LPIPS and MSE relative to the raw verifier in five of five paired seeds. Temporal-return credit obtains lower mean full-rollout and last-frame LPIPS than sequence-level calibrated GRPO in four of five seeds, with increasingly favorable deltas at later horizons. The full method gives the best mean LPIPS, last-frame LPIPS, and MSE among our trained variants and evaluates below the public RLVR-World checkpoint on all five seeds under the same held-out evaluation protocol.
 \end{abstract}
 
 % Uncomment the following to link to your code, datasets, an extended version or similar.
@@ -146,15 +146,15 @@
 
 Video world models predict future visual observations conditioned on past frames and actions, providing sampleable environment models for robotics, interactive simulation, and model-based reinforcement learning \citep{worldmodels,rssm,dreamerv3,dws}. A common implementation tokenizes visual observations and casts action-conditioned video prediction as sequence modeling: frames are encoded into discrete visual tokens, an autoregressive model predicts future tokens, and a decoder maps generated tokens back to images \citep{videogpt,magvit,ivideogpt,fsq}. Recent verifiable reward frameworks further suggest that these models can be improved after pre-training by sampling a group of candidate futures, scoring decoded predictions against ground-truth frames, and applying GRPO to reinforce candidates with higher within-group rewards \citep{rlvrworld,grpo}. This pipeline is attractive because it optimizes against measurable prediction errors rather than a learned critic.
 
-This paper studies a narrower but important question: when the world model is tokenized, is the decoded full-reference reward the right signal for GRPO, especially in multi-step rollouts? We find two coupled failure modes. First, post-decode verifiers compare candidates with raw ground truth even though the ground truth is not exactly reachable through the tokenizer-decoder pair. Second, multi-step GRPO often collapses a rollout into one sequence-level advantage, even though video prediction is autoregressive and frame errors propagate across horizons. These failures are easy to miss because the training loop remains verifiable: every candidate is still compared with a known target.
+This paper studies a narrower but important question: when the world model is tokenized, is the decoded full-reference reward the right signal for GRPO, especially in multi-step rollouts? We find two structural mismatches. First, post-decode verifiers compare candidates with raw ground truth even though the ground truth is not exactly reachable through the tokenizer--decoder pair. Second, multi-step GRPO often collapses a rollout into one sequence-level advantage, even though video prediction is autoregressive and frame errors propagate across horizons. These mismatches are easy to miss because the training loop remains verifiable: every candidate is still compared with a known target.
 
-The first failure mode is verifier-side. A lossy visual tokenizer imposes an irreducible encode-decode residual on the ground-truth frame. We call this residual the reconstruction floor. It is not caused by any sampled candidate, but post-decode metrics such as MSE, SSIM, and LPIPS still include it when scoring decoded predictions \citep{ssim,lpips}. For ordinary evaluation, this is a reconstruction-quality limit of the tokenizer \citep{vqvae,vqgan,perceptiondistortion}. For GRPO, it is a ranking problem: the update depends on relative rewards within a sample group, so reconstruction-induced noise can change which candidate receives positive advantage.
+The first failure mode is verifier-side. A lossy visual tokenizer imposes an irreducible encode-decode residual on the ground-truth frame. We call this residual the reconstruction floor. It is not caused by any sampled candidate, but post-decode metrics such as MSE, SSIM, and LPIPS still include it when scoring decoded predictions \citep{ssim,lpips}. For ordinary evaluation, this is a reconstruction-quality limit of the tokenizer \citep{vqvae,vqgan,perceptiondistortion}. For GRPO, it is a ranking problem: group normalization removes any candidate-independent offset, so the floor's mean alone cannot bias the update; what corrupts training is the candidate-dependent component of the reconstruction residual, which reorders candidates within the sample group and changes which of them receives positive advantage.
 
 The second failure mode is temporal. In a multi-step video rollout, early generated frames become the context for later predictions. A late error can therefore reflect earlier choices, later choices, or their interaction. Sequence-level GRPO ignores this structure by assigning the same normalized advantage to all generated tokens in the rollout. Fine-grained credit assignment has been explored for GRPO-style training in language reasoning and generative trajectories \citep{grpolambda,spo,sdgrpo,stepwiseflowgrpo,dapo}, but tokenized video has a different natural unit of credit: a future frame is represented by a block of visual tokens and evaluated by a frame-level verifier.
 
 We propose \emph{RC-GRPO}, a reconstruction-calibrated temporal credit assignment method for tokenized video world models. RC-GRPO keeps the sample-group, verifiable-reward, and group-relative update structure intact, but changes the target and the credit unit. For verifier calibration, it replaces the raw ground-truth frame with the tokenizer-reachable target $\tilde{s}_t = D(E(s_t))$, so decoded predictions are compared in the same reachable image space. For temporal credit assignment, it computes frame-level rewards in multi-step rollouts and forms temporal-return advantages for each future-frame token block. Early tokens can then receive credit through later frame quality, while horizon-specific prediction errors are no longer mixed into a single scalar advantage.
 
-Our contributions are threefold. First, we identify a reconstruction-floor failure mode in tokenized video GRPO and verify that the resulting pairwise rank flips follow the predicted $\arccos(\rho)/\pi$ relationship across several reward spaces. Second, we introduce reconstruction-calibrated verifiers as the reward substrate for both single-step and multi-step training. Third, we introduce temporal-return GRPO for multi-step video rollouts and show, under a fixed held-out protocol on RT-1 prediction, that it improves full-reference fidelity over sequence-level GRPO, with gains increasing toward later horizons. We also report negative auxiliary results for generic GRPO replacements, which supports the conclusion that the effective intervention point is video-structured calibration and temporal credit rather than a generic optimizer swap.
+Our contributions are twofold. First, we identify reconstruction-induced rank corruption in tokenized video GRPO and introduce a reconstruction-calibrated (RC) verifier that replaces the raw target with its tokenizer-reachable reconstruction. Pairwise reward disagreements follow the predicted $\arccos(\rho)/\pi$ relation across three reward spaces; on identical candidate groups, RC reduces disagreement with a pre-decode reference, and it lowers final LPIPS and MSE relative to the raw verifier in all five paired training seeds. Second, we introduce temporal-return GRPO for multi-step video rollouts. It assigns future-frame quality back to the token blocks that can affect it, obtains lower mean full-rollout and last-frame LPIPS than sequence-level RC in four of five seeds, and exhibits increasingly favorable deltas at later horizons. Controlled negative results bound these claims: adding further pre- or post-decode reward components does not pass our offline admission tests, and the evidence supports full-reference fidelity rather than a general improvement in motion or distributional realism.
 
 \section{Related Work}
 
@@ -170,630 +170,238 @@ Discrete visual representation learning compresses images or videos into token s
 \paragraph{Fine-grained credit assignment.}
 Sequence-level advantages can be too coarse when a generation trajectory contains multiple reasoning steps, semantic segments, or generation stages. Recent GRPO-style work addresses this issue through eligibility-trace credit assignment, segment-level policy optimization, verifiable segment decomposition, stepwise credit for flow-matching generation, and token-level loss shaping in large-scale RL systems \citep{grpolambda,spo,sdgrpo,stepwiseflowgrpo,dapo}. RC-GRPO adapts this principle to tokenized video rather than reusing token-level or denoising-step credit directly. In a video rollout, the natural credit unit is a future-frame block of visual tokens, and each block is scored by a frame-level full-reference verifier. This motivates temporal-return advantages over frame blocks after reconstruction-calibrated verifier targets, rather than a task-agnostic GRPO objective.
 
-\section{Copyright}
-All papers submitted for publication by AAAI Press must be accompanied by a valid signed copyright form. They must also contain the AAAI copyright notice at the bottom of the first page of the paper. There are no exceptions to these requirements. If you fail to provide us with a signed copyright form or disable the copyright notice, we will be unable to publish your paper. There are \textbf{no exceptions} to this policy. You will find a PDF version of the AAAI copyright form in the AAAI AuthorKit. Please see the specific instructions for your conference for submission details.
-
-\section{Formatting Requirements in Brief}
-We need source and PDF files that can be used in a variety of ways and can be output on a variety of devices. The design and appearance of the paper is strictly governed by the aaai style file (aaai2027.sty).
-\textbf{You must not make any changes to the aaai style file, nor use any commands, packages, style files, or macros within your own paper that alter that design, including, but not limited to spacing, floats, margins, fonts, font size, and appearance.} AAAI imposes requirements on your source and PDF files that must be followed. Most of these requirements are based on our efforts to standardize conference manuscript properties and layout. All papers submitted to AAAI for publication will be recompiled for standardization purposes. Consequently, every paper submission must comply with the following requirements:
-
-\begin{itemize}
-\item Your .tex file must compile in PDF\LaTeX{} --- (you may not include .ps or .eps figure files.)
-\item All fonts must be embedded in the PDF file --- including your figures.
-\item Modifications to the style file, whether directly or via commands in your document may not ever be made, most especially when made in an effort to avoid extra page charges or make your paper fit in a specific number of pages.
-\item No type 3 fonts may be used (even in illustrations).
-\item You may not alter the spacing above and below captions, figures, headings, and subheadings.
-\item You may not alter the font sizes of text elements, footnotes, heading elements, captions, or title information (for references and mathematics, please see the limited exceptions provided herein).
-\item You may not alter the line spacing of text.
-\item Your title must follow Title Case capitalization rules (not sentence case).
-\item \LaTeX{} documents must use the Times-like serif text font provided automatically by the aaai2027 style file. You may not use Computer Modern or Palatino for the text of your paper, and you must not load \texttt{times} or any other text-font package in your preamble---the style file manages the text font automatically.
-\item Your source must not require use of fonts for non-Roman alphabets within the text itself. If your paper includes symbols in other languages (such as, but not limited to, Arabic, Chinese, Hebrew, Japanese, Thai, Russian and other Cyrillic languages), you must restrict their use to bit-mapped figures. Fonts that require non-English language support (CID and Identity-H) must be converted to outlines or removed from the document (even if they are in a graphics file embedded in the document).
-\item Two-column format in AAAI style is required for all papers.
-\item The paper size for final submission must be US letter without exception.
-\item The source file must exactly match the PDF.
-\item The document margins may not be exceeded (no content should overflow into the margins or gutter).
-\item The number of pages and the file size must be as specified for your event.
-\item No document may be password protected.
-\item Neither the PDFs nor the source may contain any embedded links or bookmarks (no hyperref or navigator packages).
-\item Your source and PDF must not have any page numbers, footers, or headers (no pagestyle commands).
-\item Your PDF must conform to PDF version 1.5 or higher.
-\item Your \LaTeX{} sources archive must not contain unnecessary files (figures, extra .tex files, etc.).
-\item Your graphics must be sized appropriately outside of \LaTeX{} (do not use the ``clip" or ``trim'' command) .
-\end{itemize}
-
-If you do not follow these requirements, your paper will be returned to you to correct the deficiencies.
-
-\section{What Files to Submit}
-You must submit the following items to ensure that your paper is published:
-\begin{itemize}
-\item A fully-compliant PDF file.
-\item Your \LaTeX{} source file submitted as a \textbf{single} .tex file (do not use the ``input" command to include sections of your paper --- every section must be in the single source file). (The only allowable exception is .bib file, which should be included separately).
-\item The bibliography (.bib) file(s).
-\item Your source must compile on our system, which includes only standard \LaTeX{} 2020 TeXLive support files.
-\item Only the graphics files used in compiling paper.
-\item The \LaTeX{}-generated files (e.g. .aux,  .bbl file, PDF, etc.).
-\end{itemize}
-
-Your \LaTeX{} source will be reviewed and recompiled on our system (if it does not compile, your paper will be returned to you). \textbf{Do not submit your source in multiple text files.} Your single \LaTeX{} source file must include all your text, your bibliography (formatted using aaai2027.bst), and any custom macros.
-
-Your files should work without any supporting files (other than the program itself) on any computer with a standard \LaTeX{} distribution.
-
-\textbf{Do not send files that are not actually used in the paper.} Avoid including any files not needed for compiling your paper, including, for example, this instructions file, unused graphics files, style files, additional material sent for the purpose of the paper review, intermediate build files and so forth.
-
-\textbf{Obsolete style files.} The commands for some common packages (such as some used for algorithms), may have changed. Please be certain that you are not compiling your paper using old or obsolete style files.
-
-\textbf{Final Archive.} Place your source files in a single archive which should be compressed using .zip. The final file size may not exceed 10 MB.
-Name your source file with the last (family) name of the first author, even if that is not you.
-
-
-\section{Using \LaTeX{} to Format Your Paper}
-
-The latest version of the AAAI style file is available on AAAI's website. Download this file and place it in the \TeX\ search path. Placing it in the same directory as the paper should also work. You must download the latest version of the complete AAAI Author Kit so that you will have the latest instruction set and style file.
-
-\subsection{Document Preamble}
-
-In the \LaTeX{} source for your paper, you \textbf{must} place the following lines as shown in the example in this subsection. Add or subtract author and address lines as necessary, and uncomment the portions that apply to you. In most instances, this is all you need to do to format your paper correctly. The aaai2027 style file automatically loads all required text fonts (\texttt{newtxtext} for serif, \texttt{helvet} for sans-serif, \texttt{courier} for monospaced); do not add \textbackslash usepackage\{times\}, \textbackslash usepackage\{helvet\}, \textbackslash usepackage\{courier\}, or any other font package, as doing so will conflict with the style.
-
-Leave the setcounter for section number depth commented out and set at 0 unless you want to add section numbers to your paper. If you do add section numbers, you must uncomment this line and change the number to 1 (for section numbers), or 2 (for section and subsection numbers). The style file will not work properly with numbering of subsubsections, so do not use a number higher than 2.
-
-\subsubsection{The Following Must Appear in Your Preamble}
-\begin{quote}
-\begin{scriptsize}\begin{verbatim}
-\documentclass[letterpaper]{article}
-% DO NOT CHANGE THIS
-\usepackage{aaai2027} % DO NOT CHANGE THIS
-\usepackage[hyphens]{url} % DO NOT CHANGE THIS
-\usepackage{graphicx} % DO NOT CHANGE THIS
-\urlstyle{rm} % DO NOT CHANGE THIS
-\def\UrlFont{\rm} % DO NOT CHANGE THIS
-\usepackage{natbib}  % DO NOT CHANGE THIS
-\usepackage{caption}  % DO NOT CHANGE THIS
-\frenchspacing % DO NOT CHANGE THIS
-%
-% Keep the \pdfinfo as shown here. There's no need
-% for you to add the /Title and /Author tags.
-\pdfinfo{
-/TemplateVersion (2027.1)
-}
-\end{verbatim}\end{scriptsize}
-\end{quote}
-
-\subsection{Preparing Your Paper}
-
-After the preamble above, you should prepare your paper as follows:
-\begin{quote}
-\begin{scriptsize}\begin{verbatim}
-\begin{document}
-\maketitle
-\begin{abstract}
-%...
-\end{abstract}\end{verbatim}\end{scriptsize}
-\end{quote}
-
-\noindent If you want to add links to the paper's code, dataset(s), and extended version or similar this is the place to add them, within a \emph{links} environment:
-\begin{quote}%
-\begin{scriptsize}\begin{verbatim}
-\begin{links}
-  \link{Code}{https://aaai.org/example/guidelines}
-  \link{Datasets}{https://aaai.org/example/datasets}
-  \link{Extended version}{https://aaai.org/example}
-\end{links}\end{verbatim}\end{scriptsize}
-\end{quote}
-\noindent Make sure that you do not de-anonymize yourself with these links if you are preparing an anonymous submission.
-
-\noindent You should then continue with the body of your paper. Your paper must conclude with the references, which should be inserted as follows:
-\begin{quote}
-\begin{scriptsize}\begin{verbatim}
-% References and End of Paper
-% These lines must be placed at the end of your paper
-\bibliography{Bibliography-File}
-\end{document}
-\end{verbatim}\end{scriptsize}
-\end{quote}
-
-\subsection{Commands and Packages That May Not Be Used}
-\begin{table*}[t]
-\centering
-
-\begin{tabular}{llll}
-  \toprule
-  \textbackslash abovecaption &
-  \textbackslash abovedisplay &
-  \textbackslash addevensidemargin &
-  \textbackslash addsidemargin \\
-  \textbackslash addtolength &
-  \textbackslash baselinestretch &
-  \textbackslash belowcaption &
-  \textbackslash belowdisplay \\
-  \textbackslash break &
-  \textbackslash clearpage &
-  \textbackslash clip &
-  \textbackslash columnsep \\
-  \textbackslash float &
-  \textbackslash linespread &
-  \textbackslash newpage &
-  \textbackslash pagebreak \\
-  \textbackslash setlength &
-  \textbackslash textheight &
-  \textbackslash tiny &
-  \textbackslash topmargin \\
-  \textbackslash trim &
-  \textbackslash vskip\{- &
-  \textbackslash vspace\{- \\
-  \bottomrule
-\end{tabular}
-\caption{Commands that must not be used}
-\label{table1}
-\end{table*}
-
-\begin{table}[t]
-\centering
-\begin{tabular}{llll}
-  \toprule
-    authblk & babel & balance & cjk \\
-    epsf & epsfig & euler & float \\
-    fullpage & geometry & graphics & hyperref \\
-    layout & lmodern & navigator & pdfcomment \\
-    pgfplots & psfig & pstricks & t1enc \\
-    times & titlesec & tocbibind & ulem \\
-  \bottomrule
-\end{tabular}
-\caption{LaTeX style packages that must not be used.}
-\label{table2}
-\end{table}
-
-There are a number of packages, commands, scripts, and macros that are incompatible with aaai2027.sty. The common ones are listed in tables \ref{table1} and \ref{table2}. Generally, if a command, package, script, or macro alters float spacings, margins, fonts, sizing, linespacing, or the presentation of the references and citations, it is unacceptable. Note that negative vskip and vspace may not be used except in certain rare occurrences, and may never be used around tables, figures, captions, sections, subsections, subsubsections, or references.
-
-
-\subsection{Page Breaks}
-For your final camera ready copy, you must not use any page break commands. References must flow directly after the text without breaks. Note that some conferences require references to be on a separate page during the review process. AAAI Press, however, does not require this condition for the final paper.
-
-
-\subsection{Paper Size, Margins, and Column Width}
-Papers must be formatted to print in two-column format on 8.5 x 11 inch US letter-sized paper. The margins must be exactly as follows:
-\begin{itemize}
-\item Top margin: 1.25 inches (first page), .75 inches (others)
-\item Left margin: .75 inches
-\item Right margin: .75 inches
-\item Bottom margin: 1.25 inches
-\end{itemize}
-
-
-The default paper size in most installations of \LaTeX{} is A4. However, because we require that your electronic paper be formatted in US letter size, the aaai2027.sty style file enforces US letter page size automatically. Please note that using any other package to alter page size (such as, but not limited to the Geometry package) will result in your final paper being returned to you for correction.
-
-
-\subsubsection{Column Width and Margins.}
-To ensure maximum readability, your paper must include two columns. Each column should be 3.3 inches wide (slightly more than 3.25 inches), with a .375 inch (.952 cm) gutter of white space between the two columns. The aaai2027.sty file will automatically create these columns for you.
-
-\subsection{Overlength Papers}
-If your paper is too long and you resort to formatting tricks to make it fit, it is quite likely that it will be returned to you. The best way to retain readability if the paper is overlength is to cut text, figures, or tables. There are a few acceptable ways to reduce paper size that don't affect readability. First, turn on \textbackslash frenchspacing, which will reduce the space after periods. Next, move all your figures and tables to the top of the page. Consider removing less important portions of a figure. If you use \textbackslash centering instead of \textbackslash begin\{center\} in your figure environment, you can also buy some space. For mathematical environments, you may reduce fontsize {\bf but not below 6.5 point}.
-
-
-Commands that alter page layout are forbidden. These include \textbackslash columnsep,  \textbackslash float, \textbackslash topmargin, \textbackslash topskip, \textbackslash textheight, \textbackslash textwidth, \textbackslash oddsidemargin, and \textbackslash evensizemargin (this list is not exhaustive). If you alter page layout, you will be required to pay the page fee. Other commands that are questionable and may cause your paper to be rejected include \textbackslash parindent, and \textbackslash parskip. Commands that alter the space between sections are forbidden. The title sec package is not allowed. Regardless of the above, if your paper is obviously ``squeezed" it is not going to to be accepted. Options for reducing the length of a paper include reducing the size of your graphics, cutting text, or paying the extra page charge (if it is offered).
-
-
-\subsection{Type Font and Size}
-Your paper must be formatted using the Times-like serif text font provided automatically by the aaai2027 style file (\texttt{newtxtext}). We will not accept papers formatted using Computer Modern or Palatino or some other text typeface. Do not load \texttt{times}, \texttt{helvet}, \texttt{courier}, or any other font package in your preamble; the style file loads all three automatically. Sans-serif text, when used, is Helvetica (\texttt{helvet}); monospaced text is Courier (\texttt{courier}). Use Symbol, Lucida, or Computer Modern for \textit{mathematics only.}
-
-Do not use type 3 fonts for any portion of your paper, including graphics. Type 3 bitmapped fonts are designed for fixed resolution printers. Most print at 300 dpi even if the printer resolution is 1200 dpi or higher. They also often cause high resolution imagesetter devices to crash. Consequently, AAAI will not accept electronic files containing obsolete type 3 fonts. Files containing those fonts (even in graphics) will be rejected. (Authors using blackboard symbols must avoid packages that use type 3 fonts.)
-
-Fortunately, the aaai2027 style file --- which loads \texttt{newtxtext}, \texttt{helvet}, and \texttt{courier} --- embeds Type~1 outlines automatically under PDF\LaTeX{}. Computer Modern used for mathematics is also fine: current TeX Live and MiKTeX distributions include cm-super and Latin Modern Type~1 fonts by default, so no manual font installation is required.
-
-If you are unsure whether your paper contains Type~3 fonts, open the PDF in a viewer such as Adobe Acrobat Reader and inspect the font list (File $>$ Properties $>$ Fonts). Each embedded font should be listed as ``Type~1,'' ``TrueType,'' or ``OpenType'' --- not ``Type~3.'' The same inspection applies to embedded figures: export them from your illustration tool as PDF or high-resolution PNG/JPEG rather than EPS or PostScript.
-
-The default size for your type must be ten-point with twelve-point leading (line spacing). Start all pages (except the first) directly under the top margin. (See the next section for instructions on formatting the title page.) Indent ten points when beginning a new paragraph, unless the paragraph begins directly below a heading or subheading.
-
-\subsubsection{Nonroman Fonts.}
-If your paper includes symbols in other languages (such as, but not limited to, Arabic, Chinese, Hebrew, Japanese, Thai, Russian and other Cyrillic languages), you must restrict their use to bit-mapped figures.
-
-\subsection{Title and Authors}
-Your title must appear centered over both text columns in sixteen-point bold type (twenty-four point leading). The title must be written in Title Case according to the Chicago Manual of Style rules. The rules are a bit involved, but in general verbs (including short verbs like be, is, using, and go), nouns, adverbs, adjectives, and pronouns should be capitalized, (including both words in hyphenated terms), while articles, conjunctions, and prepositions are lower case unless they directly follow a colon or long dash. You can use the online tool \url{https://titlecaseconverter.com/} to double-check the proper capitalization (select the "Chicago" style and mark the "Show explanations" checkbox).
-
-Author's names should appear below the title of the paper, centered in twelve-point type (with fifteen point leading), along with affiliation(s) and complete address(es) (including electronic mail address if available) in nine-point roman type (the twelve point leading). You should begin the two-column format when you come to the abstract.
-
-\subsubsection{Formatting Author Information.}
-Author information has to be set according to the following specification depending if you have one or more than one affiliation. You may not use a table nor may you employ the \texttt{authorblk.sty} package. For one or several authors from the same institution, please separate them with commas and write all affiliation directly below (one affiliation per line) using the macros \textbackslash author and \textbackslash affiliations:
-
-\begin{quote}\begin{scriptsize}\begin{verbatim}
-\author{
-    Author 1, ..., Author n\\
-}
-\affiliations {
-    Address line\\
-    ... \\
-    Address line\\
-}
-\end{verbatim}\end{scriptsize}\end{quote}
-
-
-\noindent For authors from multiple institutions, use \textbackslash textsuperscript \{\textbackslash rm x\} to link authors to their affiliations. Ensure there are no spaces between the author name and the superscript. The comma should be placed after the superscript.
-
-\begin{quote}\begin{scriptsize}\begin{verbatim}
-\author{
-    AuthorOne\equalcontrib\textsuperscript{\rm 1,\rm 2},
-    AuthorTwo\equalcontrib\textsuperscript{\rm 2},
-    AuthorThree\textsuperscript{\rm 3},\\
-    AuthorFour\textsuperscript{\rm 4},\\
-    AuthorFive\textsuperscript{\rm 5}
-}
-\affiliations {
-    \textsuperscript{\rm 1}AffiliationOne,\\
-    \textsuperscript{\rm 2}AffiliationTwo,\\
-    \textsuperscript{\rm 3}AffiliationThree,\\
-    \textsuperscript{\rm 4}AffiliationFour,\\
-    \textsuperscript{\rm 5}AffiliationFive\\
-    \{email, email\}@affiliation.com,
-    email@affiliation.com,
-    email@affiliation.com,
-    email@affiliation.com
-}
-\end{verbatim}\end{scriptsize}\end{quote}
-
-You can indicate that some authors contributed equally using the \textbackslash equalcontrib command. This will add a marker after the author names and a footnote on the first page.
-
-Similarly, you can mark author(s) as corresponding author(s) with the \textbackslash corresponding command within the \textbackslash author environment.
-
-Note that you may want to  break the author list for better visualization. You can achieve this using a simple line break (\textbackslash  \textbackslash).
-
-\subsection{\LaTeX{} Copyright Notice}
-If you use aaai2027.sty in camera-ready mode the copyright notice is inserted automatically and may not be disabled. In submission mode the copyright disclaimer is automatically suppressed.
-
-\subsection{Credits}
-Any credits to a sponsoring agency should appear in the acknowledgments section, unless the agency requires different placement. If it is necessary to include this information on the front page, use
-\textbackslash thanks in either the \textbackslash author or \textbackslash title commands.
-For example:
-\begin{quote}
-\begin{small}
-\textbackslash title\{Very Important Results in AI\textbackslash thanks\{This work is
- supported by everybody.\}\}
-\end{small}
-\end{quote}
-Multiple \textbackslash thanks commands can be given. Each will result in a separate footnote indication in the author or title with the corresponding text at the bottom of the first column of the document. Note that the \textbackslash thanks command is fragile. You will need to use \textbackslash protect.
-
-Please do not include \textbackslash pubnote commands in your document.
-
-\subsection{Abstract}
-Follow the example commands in this document for creation of your abstract. The command \textbackslash begin\{abstract\} will automatically indent the text block. Please do not indent it further. {Do not include references in your abstract!}
-
-\subsection{Page Numbers}
-
-Do not print any page numbers on your paper. The use of \textbackslash pagestyle is forbidden.
-
-\subsection{Text}
-The main body of the paper must be formatted in black, ten-point Times Roman with twelve-point leading (line spacing). You may not reduce font size or the linespacing. Commands that alter font size or line spacing (including, but not limited to baselinestretch, baselineshift, linespread, and others) are expressly forbidden. In addition, you may not use color in the text.
-
-\subsection{Citations}
-Citations within the text should include the author's last name and year, for example (Newell 1980). Append lower-case letters to the year in cases of ambiguity. Multiple authors should be treated as follows: (Feigenbaum and Engelmore 1988) or (Ford, Hayes, and Glymour 1992). In the case of four or more authors, list only the first author, followed by et al. (Ford et al. 1997).
-
-\subsection{Extracts}
-Long quotations and extracts should be indented ten points from the left and right margins.
-
-\begin{quote}
-This is an example of an extract or quotation. Note the indent on both sides. Quotation marks are not necessary if you offset the text in a block like this, and properly identify and cite the quotation in the text.
-
-\end{quote}
-
-\subsection{Footnotes}
-Use footnotes judiciously, taking into account that they interrupt the reading of the text. When required, they should be consecutively numbered throughout with superscript Arabic numbers. Footnotes should appear at the bottom of the page, separated from the text by a blank line space and a thin, half-point rule.
-
-\subsection{Headings and Sections}
-When necessary, headings should be used to separate major sections of your paper. Remember, you are writing a short paper, not a lengthy book! An overabundance of headings will tend to make your paper look more like an outline than a paper. The aaai2027.sty package will create headings for you. Do not alter their size nor their spacing above or below.
-
-\subsubsection{Section Numbers.}
-The use of section numbers in AAAI Press papers is optional. To use section numbers in \LaTeX{}, uncomment the setcounter line in your document preamble and change the 0 to a 1. Section numbers should not be used in short poster papers and/or extended abstracts.
-
-\subsubsection{Section Headings.}
-Sections must appear in the following order:
-\begin{enumerate}
-\item Main content sections
-\item Content Appendices (optional).  These appendices are considered part of the main paper, count towards page limits and and are subject to the same formatting and review requirements.
-\item Ethical Statement (optional, unnumbered)
-\item Acknowledgments (optional, unnumbered)
-\item References (unnumbered)
-\item Supplementary Material / Technical Appendices (only if permitted by the conference). Policies regarding supplementary material vary across conferences: some require technical appendices to be submitted as separate documents, some permit them at submission time but do not publish them in the proceedings, and others do not allow them at all. Consult the conference website for the applicable instructions.
-\end{enumerate}
-
-\subsubsection{Content Appendices.}
-Content appendices must appear after the main content. If your main sections are numbered, appendix sections must use letters instead of arabic numerals. In \LaTeX{} you can use the \texttt{\textbackslash appendix} command to achieve this effect and then use \texttt{\textbackslash section\{Heading\}} normally for your appendix sections.
-
-\subsubsection{Ethical Statement.}
-You can write a statement about the potential ethical impact of your work, including its broad societal implications, both positive and negative. If included, such statement must be written in an unnumbered section titled \emph{Ethical Statement}.
-
-\subsubsection{Acknowledgments.}
-The acknowledgments section, if included, appears right before the references and is headed ``Acknowledgments". It must not be numbered even if other sections are (use \texttt{\textbackslash section*\{Acknowledgments\}} in \LaTeX{}). This section includes acknowledgments of help from associates and colleagues, credits to sponsoring agencies, financial support, and permission to publish. Please acknowledge other contributors, grant support, and so forth, in this section. Do not put acknowledgments in a footnote on the first page. If your grant agency requires acknowledgment of the grant on page 1, limit the footnote to the required statement, and put the remaining acknowledgments at the back. Please try to limit acknowledgments to no more than three sentences.
-
-\subsubsection{References.}
-The references section should be labeled ``References" and must appear at the very end of the paper (don't end the paper with references, and then put a figure by itself on the last page). A sample list of references is given later on in these instructions. Please use a consistent format for references. Poorly prepared or sloppy references reflect badly on the quality of your paper and your research. Please prepare complete and accurate citations.
-
-\subsection{Illustrations and Figures}
+\section{Preliminaries}
+
+\paragraph{Problem setup.}
+We study verifiable post-training for action-conditioned tokenized video world models. Given a context $q_t$ consisting of past observations and actions, the model predicts future visual states $s_{t+1:t+H}$. A visual tokenizer $E$ maps each frame to discrete visual tokens, and a decoder $D$ maps generated tokens back to image space. We write the world model as an autoregressive policy $\pi_\theta$ over future visual tokens conditioned on $q_t$ and previously generated tokens. This paper does not modify the tokenizer, decoder, or backbone world model; it studies whether the verifier target and the GRPO update are aligned with this tokenized generation interface.
+
+\paragraph{Verifiable reward training.}
+In an RLVR-style update, the policy samples a group of $G$ candidate futures for the same context. Each candidate token sequence is decoded into a visual prediction $\hat{s}_i$, and a verifier assigns a reward $R_i$ by comparing the prediction with a target frame. GRPO normalizes rewards within the sample group,
+\begin{equation}
+A_i=\frac{R_i-\mu_R}{\sigma_R+\epsilon},
+\label{eq:groupnorm}
+\end{equation}
+and uses $A_i$ to weight the log-probability of the sampled tokens. Because the normalization is group-relative, the effective training signal is not the absolute reward value alone, but the relative ordering and spacing of candidates within the group.
+
+\paragraph{Multi-step rollouts.}
+Single-step prediction evaluates one future frame. In a multi-step rollout, the model generates a sequence of future-frame token blocks, and decoded early frames become part of the context for later predictions. Let $r_{i,u}$ denote the frame-level reward of candidate $i$ at future horizon $u$; following the multi-step reward convention of RLVR-World \citep{rlvrworld}, the first future frame carries no direct action-conditioned reward, so $r_{i,1}=0$. A standard sequence-level GRPO baseline aggregates frame rewards into one rollout-level scalar,
+\begin{equation}
+R_i^{\mathrm{seq}}=\frac{1}{H-1}\sum_{u=2}^{H}r_{i,u},
+\label{eq:seqreward}
+\end{equation}
+and broadcasts the resulting advantage to all generated tokens in the rollout. This defines the credit-assignment problem studied in this paper: tokenized video prediction is autoregressive across future frames, but a single sequence-level advantage cannot distinguish the responsibility of different future-frame token blocks.
+
+\section{Method}
+
+% ------------------------------------------------------------------
+% RESERVED: Figure (overall architecture / pipeline).
+% Planned content: tokenized world-model RLVR loop with the two RC-GRPO
+% intervention points highlighted — (1) verifier target s_t -> D(E(s_t)),
+% (2) rollout-scalar advantage -> per-horizon temporal-return advantages
+% on future-frame token blocks. Suggested placement: figure* at top of
+% the Method page. Uncomment when Figures/fig_pipeline.pdf is ready.
+% \begin{figure*}[t]
+% \centering
+% \includegraphics[width=0.95\textwidth]{Figures/fig_pipeline.pdf}
+% \caption{RC-GRPO overview. A tokenized video world model samples a group
+% of candidate rollouts; RC-GRPO changes exactly two points of the training
+% signal: the verifier compares decoded frames with the tokenizer-reachable
+% target $\tilde{s}_t=D(E(s_t))$, and each future-frame token block receives
+% a per-horizon, group-normalized temporal-return advantage instead of one
+% broadcast sequence-level scalar.}
+% \label{fig:pipeline}
+% \end{figure*}
+% ------------------------------------------------------------------
+
+\paragraph{Overview.}
+RC-GRPO keeps the RLVR-style sample group, verifiable reward, and group-relative update intact, but changes two parts of the training signal that are specific to tokenized video. First, decoded predictions are compared with a tokenizer-reachable target rather than with the raw ground-truth image. Second, in multi-step rollouts, the advantage is assigned to future-frame token blocks through temporal returns rather than broadcast as one rollout-level scalar. The method therefore addresses verifier-side target mismatch and rollout-side credit mismatch without changing the tokenizer, decoder, or autoregressive world-model architecture.
+
+\paragraph{Reconstruction-calibrated verifier.}
+For a full-reference distance $d$, a lossy tokenizer induces a reconstruction floor
+\begin{equation}
+\phi_{\mathrm{tok}}^{(d)}
+=
+\mathrm{E}_{s_t}
+\left[d(D(E(s_t)),s_t)\right].
+\end{equation}
+This term is not caused by a sampled candidate, but it is included when a post-decode verifier compares a decoded prediction with the raw frame. For a candidate group, let $\delta_i=r_i^{\mathrm{raw}}-r_i^{\mathrm{reach}}$, $c=G^{-1}\sum_i\delta_i$, and $\eta_i=\delta_i-c$. Then $r_i^{\mathrm{raw}}=r_i^{\mathrm{reach}}+c+\eta_i$. Group centering removes $c$, but not the candidate-dependent $\eta_i$; the latter can therefore change within-group ranks and spacings. RC-GRPO removes this target mismatch by replacing the raw target $s_t$ with the tokenizer-reachable target
+\begin{equation}
+\tilde{s}_t = D(E(s_t)).
+\end{equation}
+Given a decoded prediction $\hat{s}_{i,t}$, the reconstruction-calibrated reward is
+\begin{equation}
+r_{i,t}^{\mathrm{RC}}
+=
+-d(\hat{s}_{i,t},\tilde{s}_t).
+\end{equation}
+In our multi-step experiments we instantiate $d$ with the RLVR-World full-reference evaluator,
+\begin{equation}
+r_{i,t}^{\mathrm{RC}}
+=
+-\left[
+\mathrm{MSE}(\hat{s}_{i,t},\tilde{s}_t)
++
+\mathrm{LPIPS}(\hat{s}_{i,t},\tilde{s}_t)
+\right].
+\end{equation}
+The raw verifier used for comparison replaces $\tilde{s}_t$ with $s_t$. The target remains verifiable because $\tilde{s}_t$ is deterministically obtained from the ground-truth frame and the frozen tokenizer; the change is that reward construction compares candidates in the image space reachable by the tokenizer--decoder pair. Final evaluation remains against the raw frame $s_t$, so the calibrated target cannot improve a reported metric by definition alone.
+
+\paragraph{Temporal-return GRPO.}
+Let a candidate rollout contain $H$ future-frame token blocks $o_{i,t,1:N}$, where $N$ is the number of visual tokens per frame block. Standard sequence-level GRPO assigns the group-normalized advantage of the rollout-level scalar $R_i^{\mathrm{seq}}$ in Eq.~\ref{eq:seqreward} to every generated token. RC-GRPO instead computes a temporal return for each future-frame block,
+\begin{equation}
+G_{i,t}
+=
+\sum_{u=t}^{H}
+\beta^{u-t} r_{i,u}^{\mathrm{RC}},
+\end{equation}
+where $\beta$ is a temporal discount. The first future frame has no direct reward ($r_{i,1}=0$, as in the preliminaries), but it can still receive credit through later rewards in $G_{i,1}$. For each horizon $t$, we normalize returns across the candidates in the same sample group:
+\begin{equation}
+A_{i,t}^{\mathrm{return}}
+=
+\frac{G_{i,t}-\mu_t}{\sigma_t+\epsilon},
+\end{equation}
+where $\mu_t$ and $\sigma_t$ are computed over $\{G_{i,t}\}_{i=1}^{G}$.
+
+\paragraph{Optimization.}
+The temporal-return advantage weights the log-probability of the corresponding future-frame token block. Let
+\begin{equation}
+\ell_{i,t}
+=
+\sum_{\tau=1}^{N}
+\log
+\pi_{\theta}
+\left(o_{i,t,\tau}\mid h_{i,t,\tau}\right),
+\end{equation}
+where $h_{i,t,\tau}$ denotes the autoregressive context of token $\tau$ in block $t$: the window context, the injected actions, and all previously generated tokens. The policy-gradient loss is
+\begin{equation}
+\mathcal{L}_{\mathrm{RCG}}
+=
+-\frac{1}{G}
+\sum_{i=1}^{G}
+\sum_{t=1}^{H}
+A_{i,t}^{\mathrm{return}}\ell_{i,t}.
+\end{equation}
+If $A_{i,t}^{\mathrm{return}}$ is replaced by the same sequence-level advantage for all $t$, the objective reduces to the sequence-level GRPO baseline. In implementation, multi-step training also uses a small reference-policy anchor,
+\begin{equation}
+\mathcal{L}
+=
+\mathcal{L}_{\mathrm{RCG}}
++
+\lambda_{\mathrm{KL}}
+\widehat{D}_{\mathrm{KL}}
+\left(\pi_\theta\|\pi_{\mathrm{ref}}\right),
+\end{equation}
+where $\pi_{\mathrm{ref}}$ is the frozen base world model and $\widehat{D}_{\mathrm{KL}}$ is a per-token log-probability-difference estimate on the sampled rollout tokens. Each sampled group is consumed by exactly one gradient step, so the update remains on-policy and requires no importance ratio or clipping. The anchor is applied consistently across multi-step arms to reduce policy drift; horizon-aware variants and gain-shaped rewards are treated as ablations rather than as part of the main method.
+
+\section{Experiments}
+
+\paragraph{Experimental setup.}
+We evaluated RC-GRPO on the RT-1 	exttt{fractal20220817} action-conditioned video data \citep{rt1} using the public RLVR-World multi-step base checkpoint and its fixed visual tokenizer \citep{rlvrworld}. The fixed split contains 24 training windows and 8 held-out evaluation windows; each window has one context frame and $H=7$ future frames. At every update, the policy samples $G=16$ candidate rollouts with temperature $1.0$ and top-$k=100$. Unless otherwise stated, multi-step runs use 30 optimization steps, learning rate $10^{-5}$, two sampled windows per step, evaluation every 10 steps, temporal discount $\beta=0.95$, advantage normalization $\epsilon=10^{-6}$, and a reference-policy anchor with $\lambda_{\mathrm{KL}}=0.001$. Because the first future frame carries no direct reward, per-horizon evaluation covers $t=2,\dots,7$, and LPIPS-last reports horizon 7. We compare the base checkpoint, the public multi-step RLVR-World checkpoint, raw and RC sequence-level GRPO, and temporal-credit variants; every trained arm uses paired seeds 0--4. We fixed the 30-step budget for all main comparisons after a preliminary stability study and report the final checkpoint, without selecting the best step. All held-out metrics compare predictions with raw future frames, never with reconstructed targets; lower LPIPS, LPIPS-last, and MSE indicate better full-reference fidelity.
 
 \begin{figure}[t]
 \centering
-\includegraphics[width=0.9\columnwidth]{Figures/figure1} % Reduce the figure size so that it is slightly narrower than the column. Don't use precise values for figure width.This setup will avoid overfull boxes.
-\caption{Using the trim and clip commands produces fragile layers that can result in disasters (like this one from an actual paper) when the color space is corrected or the PDF combined with others for the final proceedings. Crop your figures properly in a graphics program -- not in LaTeX.}
-\label{fig1}
+\includegraphics[width=\columnwidth]{Figures/fig_rank_flip.pdf}
+\caption{Rank-disagreement diagnostic for decoded verifiers. Across five generation repetitions, the observed pairwise disagreement with a pre-decode code-space reference closely follows the predicted $\arccos(\rho)/\pi$ rate. The code-space score is used as a floor-free diagnostic reference, not asserted to be the uniquely correct reward.}
+\label{fig:rank_flip}
 \end{figure}
+
+\paragraph{Rank disagreements match the verifier-noise prediction.}
+Before evaluating training outcomes, we tested whether reconstruction-induced reward variation changes the within-group ordering consumed by GRPO. For each candidate group, we correlate a decoded reward with a pre-decode code-space score of the same candidates and denote the correlation by $\rho$. The pre-decode score is not treated as ground-truth quality; it is a diagnostic reference that does not pass through the decoder. Under a jointly Gaussian score model, the probability that a candidate pair is ordered differently is the bivariate-Gaussian orthant probability $\arccos(\rho)/\pi$. Figure~\ref{fig:rank_flip} shows that this prediction tracks observed pairwise disagreement for LPIPS, MSE, and SSIM. We then rescore identical groups with RC. Across 184 held-out contexts and five independently sampled candidate groups per context (920 groups in total), aggregate disagreement decreases for LPIPS ($0.162\rightarrow0.151$), MSE ($0.181\rightarrow0.168$), and MSE+LPIPS ($0.160\rightarrow0.149$); all five generation repetitions show the same decrease, and the prediction remains within $0.005$ of the observed rate before and after calibration. Because contexts repeat across generation runs, we treat these values as a five-repetition diagnostic rather than 920 independent trials. Together, the results show that reachable-target calibration reduces measured rank disagreement; they do not claim that the code-space ordering is uniquely correct.
+
+\begin{table*}[t]
+\centering
+\caption{Multi-step prediction under our fixed held-out protocol. Rows marked \emph{Ours} are reconstruction-calibrated and temporal-credit variants. The public RLVR-World checkpoint is evaluated on our held-out split and is not a reproduction of its training recipe. The $\Delta$ row reports the relative error reduction of full RC-GRPO over that checkpoint. Values are mean $\pm$ sample standard deviation over listed seeds unless evaluation-only.}
+\label{tab:main_multistep}
+\small
+\begin{tabular}{lcccc}
+\toprule
+Method & Seeds & LPIPS $\downarrow$ & LPIPS-last $\downarrow$ & MSE $\downarrow$ \\
+ \midrule
+Base world model & eval-only & 0.2157 & 0.2260 & 0.01484 \\
+RLVR-World checkpoint & eval-only & 0.2115 & 0.2155 & 0.01378 \\
+Seq-GRPO, raw verifier & 0--4 & 0.2082 $\pm$ 0.0064 & 0.2226 $\pm$ 0.0181 & 0.01405 $\pm$ 0.00054 \\
+\midrule
+Seq-GRPO, RC verifier (\emph{Ours}) & 0--4 & 0.2009 $\pm$ 0.0042 & 0.2096 $\pm$ 0.0046 & 0.01307 $\pm$ 0.00073 \\
+RC-GRPO, temporal return (\emph{Ours, full}) & 0--4 & $\mathbf{0.1980 \pm 0.0034}$ & $\mathbf{0.2055 \pm 0.0026}$ & $\mathbf{0.01276 \pm 0.00069}$ \\
+RC-GRPO, gain return (\emph{Ours, ablation}) & 0--4 & 0.1989 $\pm$ 0.0070 & 0.2072 $\pm$ 0.0068 & 0.01271 $\pm$ 0.00101 \\
+RC-GRPO, frame advantage (\emph{Ours, ablation}) & 0--4 & 0.2086 $\pm$ 0.0035 & 0.2164 $\pm$ 0.0051 & 0.01431 $\pm$ 0.00030 \\
+\midrule
+$\Delta$ over RLVR-World (full ours) & -- & $\mathbf{+6.4\%}$ & $\mathbf{+4.6\%}$ & $\mathbf{+7.4\%}$ \\
+\bottomrule
+\end{tabular}
+\end{table*}
 
 \begin{figure*}[t]
 \centering
-\includegraphics[width=0.8\textwidth]{Figures/figure2} % Reduce the figure size so that it is slightly narrower than the column.
-\caption{Adjusting the bounding box instead of actually removing the unwanted data resulted multiple layers in this paper. It also needlessly increased the PDF size. In this case, the size of the unwanted layer doubled the paper's size, and produced the following surprising results in final production. Crop your figures properly in a graphics program. Don't just alter the bounding box.}
-\label{fig2}
+\includegraphics[width=0.98\textwidth]{Figures/fig_msp_learning_curves.pdf}
+\caption{Post-training learning curves under the fixed multi-step protocol. Curves show the mean over five seeds with one-sample-standard-deviation bands. RC-GRPO with temporal-return credit reaches the lowest mean final full-rollout and last-frame LPIPS.}
+\label{fig:msp_learning}
 \end{figure*}
 
-% Using the \centering command instead of \begin{center} ... \end{center} will save space
-% Positioning your figure at the top of the page will save space and make the paper more readable
-% Using 0.95\columnwidth in conjunction with the
+\FloatBarrier
 
+\paragraph{Main results.}
+Table~\ref{tab:main_multistep} and Figure~\ref{fig:msp_learning} show that reconstruction calibration transfers to multi-step rollouts. On paired seeds 0--4, replacing the raw target with its tokenizer-reachable reconstruction lowers LPIPS by $0.0073 \pm 0.0099$ (5/5 seeds), LPIPS-last by $0.0130 \pm 0.0212$ (4/5), and MSE by $0.0010 \pm 0.0012$ (5/5). The paired $t$ statistics ($-1.7$, $-1.4$, and $-1.8$) are not significant at $n=5$, so these are directional multi-seed results rather than significance claims. Full RC-GRPO gives the lowest mean final values on all three metrics. Under our held-out evaluation protocol, every full-method seed also scores below the single public RLVR-World checkpoint on LPIPS, LPIPS-last, and MSE; this comparison does not imply matched training recipes.
 
-Your paper must compile in PDF\LaTeX{}. Consequently, all your figures must be .jpg, .png, or .pdf. You may not use the .gif (the resolution is too low), .ps, or .eps file format for your figures.
+\begin{figure*}[!t]
+\centering
+\includegraphics[width=0.90\textwidth]{Figures/fig_horizon_delta.pdf}
+\caption{Per-horizon effect of temporal-return credit. Each panel shows temporal-return RC minus sequence-level RC over five paired seeds. Mean deltas become increasingly favorable toward later horizons across LPIPS, MSE, PSNR, and SSIM; correlated horizons are not treated as independent trials.}
+\label{fig:horizon_delta}
+\end{figure*}
 
-Figures, drawings, tables, and photographs should be placed throughout the paper on the page (or the subsequent page) where they are first discussed. Do not group them together at the end of the paper. If placed at the top of the paper, illustrations may run across both columns. Figures must not invade the top, bottom, or side margin areas. Figures must be inserted using the \textbackslash usepackage\{graphicx\}. Number figures sequentially, for example, figure 1, and so on. Do not use minipage to group figures.
+\begin{table}[t]
+\centering
+\caption{Component ablations for RC-GRPO. Each row reports the first method minus its comparator: RC verifier vs. raw sequence GRPO; temporal return vs. sequence RC; frame advantage, gain shaping, and horizon KL vs. temporal-return RC. Negative deltas are better. Wins count seeds favoring the first method.}
+\label{tab:ablation_multistep}
+\footnotesize
+\setlength{\tabcolsep}{3pt}
+\begin{tabular}{lcccc}
+\toprule
+Ablation & Seeds & LPIPS $\Delta$ & Last $\Delta$ & Wins \\
+\midrule
+RC verifier (\emph{Ours}) & 0--4 & $-0.0073$ & $-0.0130$ & 5/5, 4/5 \\
+Temporal return (\emph{Ours}) & 0--4 & $-0.0029$ & $-0.0041$ & 4/5, 4/5 \\
+Frame advantage & 0--4 & $+0.0105$ & $+0.0109$ & 0/5, 0/5 \\
+Gain shaping & 0--4 & $+0.0009$ & $+0.0017$ & 1/5, 2/5 \\
+Horizon KL & 0--2 & $+0.0008$ & $+0.0013$ & 1/3, 1/3 \\
+\bottomrule
+\end{tabular}
+\end{table}
 
-If you normally create your figures using pgfplots, note that pgfplots itself must not be used in your paper source (see Table~\ref{table2}). Pre-generate your figures externally, export them as PDF files, and import them with \textbackslash includegraphics. Bounding and trim boxes created by pgfplots are fragile and tend to create issues.
+\paragraph{Per-horizon analysis.}
+Figure~\ref{fig:horizon_delta} isolates the GRPO-side contribution by comparing temporal-return RC-GRPO with sequence-level RC-GRPO. Over 30 seed--horizon cells (five seeds, horizons 2--7), temporal-return credit lowers LPIPS on 22/30 cells, MSE on 20/30, and MAE on 20/30, while increasing PSNR and SSIM on 21/30 each. Because horizons within a seed are correlated, these tallies show directional consistency rather than 30 independent trials. The mean LPIPS delta grows from $-0.0016$ at horizon 2 to $-0.0041$ at horizon 7; the latter comparison has paired $t=-2.0$ over five seeds and remains short of conventional significance. This horizon-dependent signature is consistent with assigning later-frame quality back to earlier token blocks, but does not by itself identify a causal interaction between the two method components.
 
-When you include your figures, you must crop them \textbf{outside} of \LaTeX{}. The command \textbackslash includegraphics*[clip=true, viewport 0 0 10 10]{...} might result in a PDF that looks great, but the image is not really cropped, so \textbf{this is forbidden}. The full image can reappear (and obscure whatever it is overlapping) when page numbers are applied or color space is standardized. Figures \ref{fig1}, and \ref{fig2} display some unwanted results that often occur.
+\paragraph{Ablations and negative results.}
+Table~\ref{tab:ablation_multistep} summarizes variants around the main method. Replacing sequence-level RC with temporal returns lowers mean LPIPS by $0.0029$ and LPIPS-last by $0.0041$ in 4/5 paired seeds, although neither comparison is significant at $n=5$. The frame-advantage control isolates the return structure: normalizing each horizon independently without accumulating future rewards is substantially worse than temporal-return RC (LPIPS $+0.0105$, paired $t=+6.2$; LPIPS-last $+0.0109$, $t=+5.1$; 0/5 wins) and is also worse than sequence-level RC. Thus, finer normalization alone is insufficient; retaining future rewards in each block's return is structurally important in this protocol. Gain shaping and horizon-aware KL do not improve temporal-return RC. Offline admission tests likewise assign zero marginal weight to two pre-decode signals and find no margin-stable gain from four additional post-decode metrics, so neither metric proliferation nor those generic variants enter the final method. We also do not claim broad dynamic-quality improvement: the dynamic-direction proxy dmotion improves on only 14/30 seed--horizon cells. The supported claim is full-reference multi-step fidelity.
 
-All figures must be in .jpg, .png, or .pdf format before submission. Pre-convert any EPS or PostScript illustrations using tools such as \texttt{epstopdf} (for EPS to PDF) or \texttt{ps2pdf} (for PostScript to PDF) outside of \LaTeX{}, and verify the resulting PDF for correct bounding boxes.
+\paragraph{Reward-independent readout.}
+As a preliminary distribution-level check (seed 0, evaluation only), we embed predicted frames with DINOv2 and compute Fr\'echet and kernel distances against real held-out frames. Every post-trained checkpoint, including the public RLVR-World checkpoint, has worse KID than the base model (base $5.1$, RLVR-World $6.6$, raw sequence GRPO $13.2$, sequence RC $12.4$, temporal-return RC $9.8$). This single-seed association suggests that improved per-sample fidelity need not preserve distributional realism, but it is insufficient to establish a general trade-off. We therefore report it only as a preliminary boundary result.
 
-\subsubsection {Figure Captions.}The illustration number and caption must appear \textit{under} the illustration. Labels and other text with the actual illustration must be at least nine-point type. However, the font and size of figure captions must be 10 point roman. Do not make them smaller, bold, or italic. (Individual words may be italicized if the context requires differentiation.)
+% ------------------------------------------------------------------
+% RESERVED: Figure (qualitative results).
+% Planned content: side-by-side frames at horizons {2,4,7} for
+% base / seq-raw / seq-RC / return-RC vs. ground truth on 2-3 held-out
+% windows (prefer one with visible arm/object motion), optionally with
+% error heatmaps. Suggested placement: figure* before or after the
+% per-horizon analysis. Uncomment when Figures/fig_qualitative.pdf is ready.
+% \begin{figure*}[t]
+% \centering
+% \includegraphics[width=0.95\textwidth]{Figures/fig_qualitative.pdf}
+% \caption{Qualitative multi-step predictions on held-out windows.
+% Reconstruction calibration removes verifier-side target mismatch and
+% temporal-return credit sharpens later horizons; rows show increasing
+% horizon, columns compare methods against the real frames.}
+% \label{fig:qualitative}
+% \end{figure*}
+% ------------------------------------------------------------------
 
-\subsection{Tables}
+\section{Conclusion}
 
-Tables should be presented in 10 point roman type. If necessary, they may be altered to 9 point type. You must not use \texttt{\textbackslash resizebox} or other commands that resize the entire table to make it smaller, because you can't control the final font size this way.
-If your table is too large you can use \texttt{\textbackslash setlength\{\textbackslash tabcolsep\}\{1mm\}} to compress the columns a bit or you can adapt the content (e.g.: reduce the decimal precision when presenting numbers, use shortened column titles, make some column double-line to get it narrower). (Note: \texttt{\textbackslash setlength\{\textbackslash tabcolsep\}} is a permitted exception to the general \texttt{\textbackslash setlength} ban in Table~\ref{table1}.)
+Post-decode verifiers and sequence-level advantages each overlook structure in tokenized video: the raw target lies outside the tokenizer-reachable image space, and one scalar advantage cannot distinguish the responsibility of autoregressive future-frame blocks. RC-GRPO modifies these two interfaces. Reachable-target calibration reduces measured disagreement with a pre-decode diagnostic reference and lowers final fidelity errors relative to the raw verifier across paired seeds. Temporal-return credit gives the best mean final fidelity in our comparison and shows increasingly favorable later-horizon deltas, while the direct return-versus-sequence comparison remains statistically underpowered at five seeds. The evidence is bounded to one action-conditioned prediction interface: longer training can drift, dmotion does not improve, and a single-seed distributional check worsens for every post-trained arm. Within this scope, the results support aligning verifiers and credit units with the tokenized video generation process.
 
-Tables that do not fit in a single column must be placed across double columns. If your table won't fit within the margins even when spanning both columns and using the above techniques, you must split it in two separate tables.
-
-\subsubsection {Table Captions.} The number and caption for your table must appear \textit{under} (not above) the table.  Additionally, the font and size of table captions must be 10 point roman and must be placed beneath the figure. Do not make them smaller, bold, or italic. (Individual words may be italicized if the context requires differentiation.)
-
-
-
-\subsubsection{Low-Resolution Bitmaps.}
-You may not use low-resolution (such as 72 dpi) screen-dumps and GIF files---these files contain so few pixels that they are always blurry, and illegible when printed. If they are color, they will become an indecipherable mess when converted to black and white. This is always the case with gif files, which should never be used. The resolution of screen dumps can be increased by reducing the print size of the original file while retaining the same number of pixels. You can also enlarge files by manipulating them in software such as PhotoShop. Your figures should be 300 dpi when incorporated into your document.
-
-\subsubsection{\LaTeX{} Overflow.}
-\LaTeX{} users please beware: \LaTeX{} will sometimes put portions of the figure or table or an equation in the margin. If this happens, you need to make the figure or table span both columns. If absolutely necessary, you may reduce the figure, or reformat the equation, or reconfigure the table.{ \bf Check your log file!} You must fix any overflow into the margin (that means no overfull boxes in \LaTeX{}). \textbf{Nothing is permitted to intrude into the margin or gutter.}
-
-
-\subsubsection{Using Color.}
-Use of color should be limited to figures and minor text details (it is ok to colorize one word, but not an entire sentence). It must be WCAG 2.0 compliant. (That is, the contrast ratio must be greater than 4.5:1 no matter the font size.) It may never be used for any portion of the text of your paper. The archival version of your paper may be printed in grayscale. The web version should be readable by persons with disabilities. Consequently, because conversion to grayscale can cause undesirable effects (red changes to black, yellow can disappear, and so forth), we strongly suggest you test the figures in your document when converted to grayscale. Also, you should be mindful of readers who may happen to have trouble distinguishing colors. Hence, your paper must be decipherable without using color for distinction.
-
-\subsubsection{Drawings.}
-We suggest you use computer drawing software (such as Adobe Illustrator or, (if unavoidable), the drawing tools in Microsoft Word) to create your illustrations. Do not use Microsoft Publisher. These illustrations will look best if all line widths are uniform (half- to two-point in size), and you do not create labels over shaded areas. Shading should be 133 lines per inch if possible. Use Times Roman or Helvetica for all figure call-outs. \textbf{Do not use hairline width lines} --- be sure that the stroke width of all lines is at least .5 pt. Zero point lines will print on a laser printer, but will completely disappear on the high-resolution devices used by our printers.
-
-\subsubsection{Photographs and Images.}
-Photographs and other images should be in grayscale (color photographs will not reproduce well; for example, red tones will reproduce as black, yellow may turn to white, and so forth) and set to a minimum of 300 dpi. Do not prescreen images.
-
-\subsubsection{Resizing Graphics.}
-Resize your graphics \textbf{before} you include them with LaTeX. You may \textbf{not} use trim or clip options as part of your \textbackslash includegraphics command. Resize the media box of your PDF using a graphics program instead.
-
-\subsubsection{Fonts in Your Illustrations.}
-You must embed all fonts in your graphics before including them in your LaTeX document.
-
-\subsubsection{Algorithms.}
-Algorithms and/or programs are a special kind of figures. Like all illustrations, they should appear floated to the top (preferably) or bottom of the page. However, their caption should appear in the header, left-justified and enclosed between horizontal lines, as shown in Algorithm~\ref{alg:algorithm}. The algorithm body should be terminated with another horizontal line. It is up to the authors to decide whether to show line numbers or not, how to format comments, etc.
-
-In \LaTeX{} algorithms may be typeset using the {\tt algorithm} and {\tt algorithmic} packages, but you can also use one of the many other packages for the task.
-
-\begin{algorithm}[tb]
-\caption{Example algorithm}
-\label{alg:algorithm}
-\textbf{Input}: Your algorithm's input\\
-\textbf{Parameter}: Optional list of parameters\\
-\textbf{Output}: Your algorithm's output
-\begin{algorithmic}[1] %[1] enables line numbers
-\STATE Let $t=0$.
-\WHILE{condition}
-\STATE Do some action.
-\IF {conditional}
-\STATE Perform task A.
-\ELSE
-\STATE Perform task B.
-\ENDIF
-\ENDWHILE
-\STATE \textbf{return} solution
-\end{algorithmic}
-\end{algorithm}
-
-\subsubsection{Listings.}
-Listings are much like algorithms and programs. They should also appear floated to the top (preferably) or bottom of the page. Listing captions should appear in the header, left-justified and enclosed between horizontal lines as shown in Listing~\ref{lst:listing}. Terminate the body with another horizontal line and avoid any background color. Line numbers, if included, must appear within the text column.
-
-\begin{listing}[tb]%
-\caption{Example listing {\tt quicksort.hs}}%
-\label{lst:listing}%
-\begin{lstlisting}[language=Haskell]
-quicksort :: Ord a => [a] -> [a]
-quicksort []     = []
-quicksort (p:xs) = (quicksort lesser) ++ [p] ++ (quicksort greater)
-	where
-		lesser  = filter (< p) xs
-		greater = filter (>= p) xs
-\end{lstlisting}
-\end{listing}
-
-\subsection{References}
-The AAAI style includes a set of definitions for use in formatting references with BibTeX. These definitions make the bibliography style fairly close to the ones  specified in the Reference Examples appendix below. To use these definitions, you also need the BibTeX style file ``aaai2027.bst," available in the AAAI Author Kit on the AAAI web site. Then, at the end of your paper but before \textbackslash end{document}, you need to put the following lines:
-
-\begin{quote}
-\begin{small}
-\textbackslash bibliography\{bibfile1,bibfile2,...\}
-\end{small}
-\end{quote}
-
-Please note that the aaai2027.sty class already sets the bibliographystyle for you, so you do not have to place any \textbackslash bibliographystyle command in the document yourselves. The aaai2027.sty file is incompatible with the hyperref and navigator packages. If you use either, your references will be garbled and your paper will be returned to you.
-
-References may be the same size as surrounding text.
-However, in this section (only), you may reduce the size to {\em \textbackslash small} (9pt) if your paper exceeds the allowable number of pages. Making it any smaller than 9 point with 10 point linespacing, however, is not allowed.
-
-The list of files in the \textbackslash bibliography command should be the names of your BibTeX source files (that is, the .bib files referenced in your paper).
-
-The following commands are available for your use in citing references:
-\begin{quote}
-{\em \textbackslash cite:} Cites the given reference(s) with a full citation. This appears as ``(Author Year)'' for one reference, or ``(Author Year; Author Year)'' for multiple references.\smallskip\\
-{\em \textbackslash shortcite:} Cites the given reference(s) with just the year. This appears as ``(Year)'' for one reference, or ``(Year; Year)'' for multiple references.\smallskip\\
-{\em \textbackslash citeauthor:} Cites the given reference(s) with just the author name(s) and no parentheses.\smallskip\\
-{\em \textbackslash citeyear:} Cites the given reference(s) with just the date(s) and no parentheses.
-\end{quote}
-You may also use any of the \emph{natbib} citation commands.
-
-
-\section{Proofreading Your PDF}
-Please check all the pages of your PDF file. The most commonly forgotten element is the acknowledgments --- especially the correct grant number. Authors also commonly forget to add the metadata to the source, use the wrong reference style file, or don't follow the capitalization rules or comma placement for their author-title information properly. A final common problem is text (especially equations) that runs into the margin. You will need to fix these common errors before submitting your file.
-
-\section{Improperly Formatted Files }
-In the past, AAAI has corrected improperly formatted files submitted by the authors. Unfortunately, this has become an increasingly burdensome expense that we can no longer absorb). Consequently, if your file is improperly formatted, it will be returned to you for correction.
-
-\section{Naming Your Electronic File}
-We require that you name your \LaTeX{} source file with the last name (family name) of the first author so that it can easily be differentiated from other submissions. Complete file-naming instructions will be provided to you in the submission instructions.
-
-\section{Submitting Your Electronic Files to AAAI}
-Instructions on paper submittal will be provided to you in your acceptance letter.
-
-\section{Inquiries}
-If you have any questions about the preparation or submission of your paper as instructed in this document, please contact AAAI Press at the address given below. If you have technical questions about implementation of the aaai style file, please contact an expert at your site. We do not provide technical support for \LaTeX{} or any other software package. To avoid problems, please keep your paper simple, and do not incorporate complicated macros and style files.
-
-\begin{quote}
-\noindent AAAI Press\\
-1101 Pennsylvania Ave, NW Suite 300\\
-Washington, DC 20004 USA\\
-\textit{Telephone:} 1-202-360-4062\\
-\textit{E-mail:} See the submission instructions for your particular conference or event.
-\end{quote}
-
-\section{Additional Resources}
-\LaTeX{} is a difficult program to master. If you encounter issues producing correct PDF output, please consult your TeX distribution documentation (TeX Live or MiKTeX) and ensure you are using an up-to-date PDF\LaTeX{} workflow. Most compilation and font issues can be resolved by updating your distribution and avoiding deprecated packages.
-
-\appendix
-\section{Reference Examples}
-\label{sec:reference_examples}
-
-Formatted bibliographies should look like the following examples. You should use BibTeX to generate the references. Missing fields are unacceptable when compiling references, and usually indicate that you are using the wrong type of entry (BibTeX class).
-
-\paragraph{Book with multiple authors} Use the \texttt{@book} class.\\[.2em]
-\nocite{em:86}
-%%BIBENTRY-BEGIN:em:86|.%%
-Engelmore, R.; and Morgan, A., eds. 1986.
-\newblock \emph{Blackboard Systems}.
-\newblock Reading, Mass.: Addison-Wesley.
-%%BIBENTRY-END:em:86%%
-
-\paragraph{Journal and magazine articles} Use the \texttt{@article} class.\\[.2em]
-\nocite{r:80}
-%%BIBENTRY-BEGIN:r:80|.\\[.2em]%%
-Robinson, A.~L. 1980.
-\newblock New Ways to Make Microcircuits Smaller.
-\newblock \emph{Science}, 208(4447): 1019--1022.\\[.2em]
-%%BIBENTRY-END:r:80%%
-\nocite{hcr:83}
-%%BIBENTRY-BEGIN:hcr:83|.%%
-Hasling, D.~W.; Clancey, W.~J.; and Rennels, G. 1984.
-\newblock Strategic explanations for a diagnostic consultation system.
-\newblock \emph{International Journal of Man-Machine Studies}, 20(1): 3--19.
-%%BIBENTRY-END:hcr:83%%
-
-\paragraph{Proceedings paper published by a society, press or publisher} Use the \texttt{@inproceedings} class. You may abbreviate the \emph{booktitle} field, but make sure that the conference edition is clear.\\[.2em]
-\nocite{c:84}
-%%BIBENTRY-BEGIN:c:84|.\\[.2em]%%
-Clancey, W.~J. 1984.
-\newblock {Classification Problem Solving}.
-\newblock In \emph{Proceedings of the Fourth National Conference on Artificial
-  Intelligence}, 45--54. Menlo Park, Calif.: AAAI Press.\\[.2em]
-%%BIBENTRY-END:c:84%%
-\nocite{c:83}
-%%BIBENTRY-BEGIN:c:83|.%%
-Clancey, W.~J. 1983.
-\newblock {Communication, Simulation, and Intelligent Agents: Implications of
-  Personal Intelligent Machines for Medical Education}.
-\newblock In \emph{Proceedings of the Eighth International Joint Conference on
-  Artificial Intelligence {(IJCAI-83)}}, 556--560. Menlo Park, Calif: {IJCAI
-  Organization}.
-%%BIBENTRY-END:c:83%%
-
-\paragraph{University technical report} Use the \texttt{@techreport} class.\\[.2em]
-\nocite{r:86}
-%%BIBENTRY-BEGIN:r:86|.%%
-Rice, J. 1986.
-\newblock {Poligon: A System for Parallel Problem Solving}.
-\newblock Technical Report KSL-86-19, Dept.\ of Computer Science, Stanford
-  Univ.
-%%BIBENTRY-END:r:86%%
-
-\paragraph{Dissertation or thesis} Use the \texttt{@phdthesis} class.\\[.2em]
-\nocite{c:79}
-%%BIBENTRY-BEGIN:c:79|.%%
-Clancey, W.~J. 1979.
-\newblock \emph{{Transfer of Rule-Based Expertise through a Tutorial
-  Dialogue}}.
-\newblock {Ph.D.} diss., Dept.\ of Computer Science, Stanford Univ., Stanford,
-  Calif.
-%%BIBENTRY-END:c:79%%
-
-\paragraph{Forthcoming publication} Use the \texttt{@misc} class with a \texttt{note="Forthcoming"} annotation.
-\begin{quote}
-\begin{footnotesize}
-\begin{verbatim}
-@misc(key,
-  [...]
-  note="Forthcoming",
-)
-\end{verbatim}
-\end{footnotesize}
-\end{quote}
-\nocite{c:21}
-%%BIBENTRY-BEGIN:c:21|.%%
-Clancey, W.~J. 2021.
-\newblock {The Engineering of Qualitative Models}.
-\newblock Forthcoming.
-%%BIBENTRY-END:c:21%%
-
-\paragraph{ArXiv paper} Fetch the BibTeX entry from the ``Export Bibtex Citation" link in the arXiv website. Notice it uses the \texttt{@misc} class instead of the \texttt{@article} one, and that it includes the \texttt{eprint} and \texttt{archivePrefix} keys.
-\begin{quote}
-\begin{footnotesize}
-\begin{verbatim}
-@misc(key,
-  [...]
-  eprint="xxxx.yyyy",
-  archivePrefix="arXiv",
-)
-\end{verbatim}
-\end{footnotesize}
-\end{quote}
-\nocite{c:22}
-%%BIBENTRY-BEGIN:c:22|.%%
-Vaswani, A.; Shazeer, N.; Parmar, N.; Uszkoreit, J.; Jones, L.; Gomez, A.~N.;
-  Kaiser, L.; and Polosukhin, I. 2023.
-\newblock Attention Is All You Need.
-\newblock arXiv:1706.03762.
-%%BIBENTRY-END:c:22%%
-
-\paragraph{Website or online resource} Use the \texttt{@misc} class. Add the url in the \texttt{howpublished} field and the date of access in the \texttt{note} field:
-\begin{quote}
-\begin{footnotesize}
-\begin{verbatim}
-@misc(key,
-  [...]
-  howpublished="\url{http://...}",
-  note="Accessed: YYYY-mm-dd",
-)
-\end{verbatim}
-\end{footnotesize}
-\end{quote}
-\nocite{c:23}
-%%BIBENTRY-BEGIN:c:23|.%%
-{NASA}. 2015.
-\newblock Pluto: The 'Other' Red Planet.
-\newblock \url{https://www.nasa.gov/nh/pluto-the-other-red-planet}.
-\newblock Accessed: 2018-12-06.
-%%BIBENTRY-END:c:23%%
-
-\section*{Acknowledgments}
-AAAI is especially grateful to Peter Patel Schneider for his work in implementing the original aaai.sty file, liberally using the ideas of other style hackers, including Barbara Beeton. We also acknowledge with thanks the work of George Ferguson for his guide to using the style and BibTeX files --- which has been incorporated into this document --- and Hans Guesgen, who provided several timely modifications, as well as the many others who have, from time to time, sent in suggestions on improvements to the AAAI style. We are especially grateful to Francisco Cruz, Marc Pujol-Gonzalez, and Mico Loretan for the improvements to the Bib\TeX{} and \LaTeX{} files made in 2020.
-
-The preparation of the \LaTeX{} and Bib\TeX{} files that implement these instructions was supported by Schlumberger Palo Alto Research, AT\&T Bell Laboratories, Morgan Kaufmann Publishers, The Live Oak Press, LLC, and AAAI Press. Bibliography style changes were added by Sunil Issar. \verb+\+pubnote was added by J. Scott Penberthy. George Ferguson added support for printing the AAAI copyright slug. Additional changes to aaai2027.sty and aaai2027.bst have been made by Francisco Cruz, Marc Pujol-Gonzalez, and Mico Loretan.
-
-\bigskip
-\noindent Thank you for reading these instructions carefully. We look forward to receiving your electronic files!
+\paragraph{Data and code availability.}
+We use the publicly available RT-1 data cited above. Processed source data for all manuscript figures are included with the submission, together with analysis scripts and the configurations needed to reproduce the reported tables. Training code and model-output summaries are provided in the anonymous supplementary archive.
 
 \bibliography{aaai2027}
 

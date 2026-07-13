@@ -206,6 +206,28 @@ def msp_rewards_frame(pred, real_f, target_f, metrics, kind="rc"):
     return out
 
 
+@torch.no_grad()
+def msp_code_rms(tok, dyn, gt_dyn):
+    """Per-frame RMS in continuous dynamics-FSQ code space.
+
+    ``dyn`` is [K,F,80] and ``gt_dyn`` is [1,F,80] or [F,80]. Token IDs are
+    categorical and must never be compared numerically; this function maps them
+    through ``dynamics_quantize.indices_to_codes`` first. Returns [K,F].
+    """
+    if dyn.ndim != 3 or dyn.shape[-1] != DYN_PER_FRAME:
+        raise ValueError(f"dyn must be [K,F,{DYN_PER_FRAME}], got {tuple(dyn.shape)}")
+    if gt_dyn.ndim == 2:
+        gt_dyn = gt_dyn.unsqueeze(0)
+    if gt_dyn.ndim != 3 or gt_dyn.shape[0] != 1 or gt_dyn.shape[1:] != dyn.shape[1:]:
+        raise ValueError(f"gt_dyn shape {tuple(gt_dyn.shape)} is incompatible with dyn")
+    K, H = dyn.shape[:2]
+    cand_idx = dyn.reshape(K * H, 8, 10)
+    gt_idx = gt_dyn.expand(K, -1, -1).reshape(K * H, 8, 10)
+    cand_code = tok.dynamics_quantize.indices_to_codes(cand_idx).float()
+    gt_code = tok.dynamics_quantize.indices_to_codes(gt_idx).float()
+    return (cand_code - gt_code).square().flatten(1).mean(1).sqrt().reshape(K, H)
+
+
 def _selftest():
     # spatial: 16x20=320 grid, 2x2 spatial, H=3 -> 3*4=12 segments
     ids, n = build_seg_ids_st(3, 320, (2, 2), grid=(16, 20))

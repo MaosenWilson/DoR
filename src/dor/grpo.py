@@ -444,7 +444,8 @@ def eval_model(model, tok, metrics, wins, device, K=8, seed=999, flow=True):
 def train(mode, *, reward="pixel", alpha=0.5, phi_tok=0.0, weight_temp=1.0,
           rank_weight=False, rank_sigma=-1.0, rank_sigma_scale=1.0,
           rank_min_weight=0.05,
-          dyn_lambda=0.25, dyn_gamma=0.25, dyn_tau=0.0,
+          dyn_lambda=0.25, dyn_gamma=0.25, dyn_tau=0.0, rcmg_pre_weight=0.5,
+          rankcal_weights_path=None, reachable_target_cache=None,
           floor_filter=False, tau=1.0, steps=40, K=8, batch_windows=2,
           train_windows=24, eval_windows=12, lr=1e-5, lam=0.5, beta=0.5, kl=0.0,
           eval_every=10, seed=0, ckpt_dir=None, device="cuda", deterministic=False,
@@ -462,6 +463,10 @@ def train(mode, *, reward="pixel", alpha=0.5, phi_tok=0.0, weight_temp=1.0,
     the original behaviour bit-for-bit.
     """
     from dor.reward_spaces import gt_reward as gt_reward_space  # local: avoid import cycle
+    mrrt_targets = None
+    if reward in ("mrrt", "mrrt_random"):
+        from dor.reachable_projection import load_mrrt_cache
+        mrrt_targets = load_mrrt_cache(reachable_target_cache)
     if deterministic:
         set_determinism(seed)
     s_code = sigma_eta_norm = None
@@ -537,6 +542,17 @@ def train(mode, *, reward="pixel", alpha=0.5, phi_tok=0.0, weight_temp=1.0,
             with torch.no_grad():
                 cand = generate_candidates(model, prompt, K, seed=step * 1000 + int(bi))
                 gt_idx = encode_indices(tok, gt.unsqueeze(0))
+                reachable_target_idx = None
+                if mrrt_targets is not None:
+                    target_key = (os.path.basename(p), int(s))
+                    if target_key not in mrrt_targets:
+                        raise KeyError(f"training window missing from MRRT cache: {target_key}")
+                    target_name = "mrrt" if reward == "mrrt" else "mrrt_random"
+                    reachable_target_idx = torch.as_tensor(
+                        mrrt_targets[target_key][target_name],
+                        device=device,
+                        dtype=torch.long,
+                    )
                 if adv_estimator == "seg_grpo":
                     # spatial segment-level credit assignment
                     if seg_reward == "codec_fused":
@@ -600,7 +616,10 @@ def train(mode, *, reward="pixel", alpha=0.5, phi_tok=0.0, weight_temp=1.0,
                     r_gt = gt_reward_space(reward, metrics, tok, cand, imgs, gt, gt_idx,
                                            alpha=alpha, phi_tok=phi_tok, weight_temp=weight_temp,
                                            cur_idx=cur_idx, dyn_lambda=dyn_lambda,
-                                           dyn_gamma=dyn_gamma, dyn_tau=dyn_tau)
+                                           dyn_gamma=dyn_gamma, dyn_tau=dyn_tau,
+                                           rcmg_pre_weight=rcmg_pre_weight,
+                                           rankcal_weights_path=rankcal_weights_path,
+                                           reachable_target_idx=reachable_target_idx)
                     if mode in ("gt_only", "drgrpo", "rankrel"):
                         adv, _ = shape_advantage(r_gt, mode=mode)
                     else:

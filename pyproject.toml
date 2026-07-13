@@ -1,7 +1,7 @@
 [project]
 name = "dor"
 version = "0.2.0"
-description = "Consensus-shaped advantage estimation for verifiable world-model RL (RLVR-World + RT-1)."
+description = "Reconstruction-calibrated GRPO experiments for tokenized video world models."
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = []

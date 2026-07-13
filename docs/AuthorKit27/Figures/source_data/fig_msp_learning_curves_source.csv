@@ -1,0 +1,165 @@
+figure,panel_metric,arm,run_index,step,value
+fig_msp_learning_curves,eval_lpips,Seq raw,0,0,0.21570572862401605
+fig_msp_learning_curves,eval_lpips,Seq raw,0,10,0.21076797166218358
+fig_msp_learning_curves,eval_lpips,Seq raw,0,20,0.20145230212559304
+fig_msp_learning_curves,eval_lpips,Seq raw,0,30,0.2180073627581199
+fig_msp_learning_curves,eval_lpips,Seq raw,1,0,0.21570572862401605
+fig_msp_learning_curves,eval_lpips,Seq raw,1,10,0.21453498676419258
+fig_msp_learning_curves,eval_lpips,Seq raw,1,20,0.2092324843009313
+fig_msp_learning_curves,eval_lpips,Seq raw,1,30,0.2101500229910016
+fig_msp_learning_curves,eval_lpips,Seq raw,2,0,0.21570572862401605
+fig_msp_learning_curves,eval_lpips,Seq raw,2,10,0.21067985178281862
+fig_msp_learning_curves,eval_lpips,Seq raw,2,20,0.20728878537192938
+fig_msp_learning_curves,eval_lpips,Seq raw,2,30,0.20632844061280292
+fig_msp_learning_curves,eval_lpips,Seq raw,3,0,0.21570572862401605
+fig_msp_learning_curves,eval_lpips,Seq raw,3,10,0.20804262440651655
+fig_msp_learning_curves,eval_lpips,Seq raw,3,20,0.20608111113930744
+fig_msp_learning_curves,eval_lpips,Seq raw,3,30,0.20086948185538253
+fig_msp_learning_curves,eval_lpips,Seq raw,4,0,0.21570572862401605
+fig_msp_learning_curves,eval_lpips,Seq raw,4,10,0.21850321472932893
+fig_msp_learning_curves,eval_lpips,Seq raw,4,20,0.21344699400166672
+fig_msp_learning_curves,eval_lpips,Seq raw,4,30,0.2057873128602902
+fig_msp_learning_curves,eval_lpips,Seq RC (Ours),0,0,0.21570572862401605
+fig_msp_learning_curves,eval_lpips,Seq RC (Ours),0,10,0.21011196092392007
+fig_msp_learning_curves,eval_lpips,Seq RC (Ours),0,20,0.2002717324843009
+fig_msp_learning_curves,eval_lpips,Seq RC (Ours),0,30,0.19387606624513867
+fig_msp_learning_curves,eval_lpips,Seq RC (Ours),1,0,0.21570572862401605
+fig_msp_learning_curves,eval_lpips,Seq RC (Ours),1,10,0.20809583319351077
+fig_msp_learning_curves,eval_lpips,Seq RC (Ours),1,20,0.205079745190839
+fig_msp_learning_curves,eval_lpips,Seq RC (Ours),1,30,0.20191467522333065
+fig_msp_learning_curves,eval_lpips,Seq RC (Ours),2,0,0.21570572862401605
+fig_msp_learning_curves,eval_lpips,Seq RC (Ours),2,10,0.21052634219328564
+fig_msp_learning_curves,eval_lpips,Seq RC (Ours),2,20,0.2083033745487531
+fig_msp_learning_curves,eval_lpips,Seq RC (Ours),2,30,0.20325022252897423
+fig_msp_learning_curves,eval_lpips,Seq RC (Ours),3,0,0.21570572862401605
+fig_msp_learning_curves,eval_lpips,Seq RC (Ours),3,10,0.20869790778184932
+fig_msp_learning_curves,eval_lpips,Seq RC (Ours),3,20,0.20470128518839675
+fig_msp_learning_curves,eval_lpips,Seq RC (Ours),3,30,0.2006501597352326
+fig_msp_learning_curves,eval_lpips,Seq RC (Ours),4,0,0.21570572862401605
+fig_msp_learning_curves,eval_lpips,Seq RC (Ours),4,10,0.21441484444464246
+fig_msp_learning_curves,eval_lpips,Seq RC (Ours),4,20,0.207669988895456
+fig_msp_learning_curves,eval_lpips,Seq RC (Ours),4,30,0.20483699875573316
+fig_msp_learning_curves,eval_lpips,"Return RC (Ours, full)",0,0,0.21570572862401605
+fig_msp_learning_curves,eval_lpips,"Return RC (Ours, full)",0,10,0.21093526467060048
+fig_msp_learning_curves,eval_lpips,"Return RC (Ours, full)",0,20,0.20483917013431588
+fig_msp_learning_curves,eval_lpips,"Return RC (Ours, full)",0,30,0.19758927542716265
+fig_msp_learning_curves,eval_lpips,"Return RC (Ours, full)",1,0,0.21570572862401605
+fig_msp_learning_curves,eval_lpips,"Return RC (Ours, full)",1,10,0.21022636350244284
+fig_msp_learning_curves,eval_lpips,"Return RC (Ours, full)",1,20,0.19880088636030752
+fig_msp_learning_curves,eval_lpips,"Return RC (Ours, full)",1,30,0.1971754290473958
+fig_msp_learning_curves,eval_lpips,"Return RC (Ours, full)",2,0,0.21570572862401605
+fig_msp_learning_curves,eval_lpips,"Return RC (Ours, full)",2,10,0.20823633903637528
+fig_msp_learning_curves,eval_lpips,"Return RC (Ours, full)",2,20,0.19961020785073438
+fig_msp_learning_curves,eval_lpips,"Return RC (Ours, full)",2,30,0.19588252824420732
+fig_msp_learning_curves,eval_lpips,"Return RC (Ours, full)",3,0,0.21570572862401605
+fig_msp_learning_curves,eval_lpips,"Return RC (Ours, full)",3,10,0.2073814927910765
+fig_msp_learning_curves,eval_lpips,"Return RC (Ours, full)",3,20,0.19882538635283709
+fig_msp_learning_curves,eval_lpips,"Return RC (Ours, full)",3,30,0.1956523386761546
+fig_msp_learning_curves,eval_lpips,"Return RC (Ours, full)",4,0,0.21570572862401605
+fig_msp_learning_curves,eval_lpips,"Return RC (Ours, full)",4,10,0.2094991561025381
+fig_msp_learning_curves,eval_lpips,"Return RC (Ours, full)",4,20,0.2052236495849987
+fig_msp_learning_curves,eval_lpips,"Return RC (Ours, full)",4,30,0.20385547308251262
+fig_msp_learning_curves,eval_lpips,Gain return (Ablation),0,0,0.21570572862401605
+fig_msp_learning_curves,eval_lpips,Gain return (Ablation),0,10,0.20780219913770753
+fig_msp_learning_curves,eval_lpips,Gain return (Ablation),0,20,0.19893955858424306
+fig_msp_learning_curves,eval_lpips,Gain return (Ablation),0,30,0.1920993213231365
+fig_msp_learning_curves,eval_lpips,Gain return (Ablation),1,0,0.21570572862401605
+fig_msp_learning_curves,eval_lpips,Gain return (Ablation),1,10,0.20865545763323703
+fig_msp_learning_curves,eval_lpips,Gain return (Ablation),1,20,0.20362378408511478
+fig_msp_learning_curves,eval_lpips,Gain return (Ablation),1,30,0.19967300336187083
+fig_msp_learning_curves,eval_lpips,Gain return (Ablation),2,0,0.21570572862401605
+fig_msp_learning_curves,eval_lpips,Gain return (Ablation),2,10,0.20787246727074188
+fig_msp_learning_curves,eval_lpips,Gain return (Ablation),2,20,0.19997629011049867
+fig_msp_learning_curves,eval_lpips,Gain return (Ablation),2,30,0.1965984469279647
+fig_msp_learning_curves,eval_lpips,Gain return (Ablation),3,0,0.21570572862401605
+fig_msp_learning_curves,eval_lpips,Gain return (Ablation),3,10,0.20685778014982742
+fig_msp_learning_curves,eval_lpips,Gain return (Ablation),3,20,0.20229508463914198
+fig_msp_learning_curves,eval_lpips,Gain return (Ablation),3,30,0.1957741342484951
+fig_msp_learning_curves,eval_lpips,Gain return (Ablation),4,0,0.21570572862401605
+fig_msp_learning_curves,eval_lpips,Gain return (Ablation),4,10,0.21461818770815927
+fig_msp_learning_curves,eval_lpips,Gain return (Ablation),4,20,0.21273692324757576
+fig_msp_learning_curves,eval_lpips,Gain return (Ablation),4,30,0.21042177686467767
+fig_msp_learning_curves,eval_lpips_last,Seq raw,0,0,0.22598793730139732
+fig_msp_learning_curves,eval_lpips_last,Seq raw,0,10,0.2203410416841507
+fig_msp_learning_curves,eval_lpips_last,Seq raw,0,20,0.21274733170866966
+fig_msp_learning_curves,eval_lpips_last,Seq raw,0,30,0.2523740269243717
+fig_msp_learning_curves,eval_lpips_last,Seq raw,1,0,0.22598793730139732
+fig_msp_learning_curves,eval_lpips_last,Seq raw,1,10,0.22811752930283546
+fig_msp_learning_curves,eval_lpips_last,Seq raw,1,20,0.22260329127311707
+fig_msp_learning_curves,eval_lpips_last,Seq raw,1,30,0.22658738121390343
+fig_msp_learning_curves,eval_lpips_last,Seq raw,2,0,0.22598793730139732
+fig_msp_learning_curves,eval_lpips_last,Seq raw,2,10,0.22004909440875053
+fig_msp_learning_curves,eval_lpips_last,Seq raw,2,20,0.21520917117595673
+fig_msp_learning_curves,eval_lpips_last,Seq raw,2,30,0.21388566121459007
+fig_msp_learning_curves,eval_lpips_last,Seq raw,3,0,0.22598793730139732
+fig_msp_learning_curves,eval_lpips_last,Seq raw,3,10,0.21438984386622906
+fig_msp_learning_curves,eval_lpips_last,Seq raw,3,20,0.21258394978940487
+fig_msp_learning_curves,eval_lpips_last,Seq raw,3,30,0.20737586356699467
+fig_msp_learning_curves,eval_lpips_last,Seq raw,4,0,0.22598793730139732
+fig_msp_learning_curves,eval_lpips_last,Seq raw,4,10,0.23036734201014042
+fig_msp_learning_curves,eval_lpips_last,Seq raw,4,20,0.22288378328084946
+fig_msp_learning_curves,eval_lpips_last,Seq raw,4,30,0.21264063846319914
+fig_msp_learning_curves,eval_lpips_last,Seq RC (Ours),0,0,0.22598793730139732
+fig_msp_learning_curves,eval_lpips_last,Seq RC (Ours),0,10,0.21949118934571743
+fig_msp_learning_curves,eval_lpips_last,Seq RC (Ours),0,20,0.20929587353020906
+fig_msp_learning_curves,eval_lpips_last,Seq RC (Ours),0,30,0.20270127523690462
+fig_msp_learning_curves,eval_lpips_last,Seq RC (Ours),1,0,0.22598793730139732
+fig_msp_learning_curves,eval_lpips_last,Seq RC (Ours),1,10,0.22076986730098724
+fig_msp_learning_curves,eval_lpips_last,Seq RC (Ours),1,20,0.2147399690002203
+fig_msp_learning_curves,eval_lpips_last,Seq RC (Ours),1,30,0.21349385380744934
+fig_msp_learning_curves,eval_lpips_last,Seq RC (Ours),2,0,0.22598793730139732
+fig_msp_learning_curves,eval_lpips_last,Seq RC (Ours),2,10,0.22035105898976326
+fig_msp_learning_curves,eval_lpips_last,Seq RC (Ours),2,20,0.21747738122940063
+fig_msp_learning_curves,eval_lpips_last,Seq RC (Ours),2,30,0.21225946582853794
+fig_msp_learning_curves,eval_lpips_last,Seq RC (Ours),3,0,0.22598793730139732
+fig_msp_learning_curves,eval_lpips_last,Seq RC (Ours),3,10,0.21748605370521545
+fig_msp_learning_curves,eval_lpips_last,Seq RC (Ours),3,20,0.21300353296101093
+fig_msp_learning_curves,eval_lpips_last,Seq RC (Ours),3,30,0.20696753915399313
+fig_msp_learning_curves,eval_lpips_last,Seq RC (Ours),4,0,0.22598793730139732
+fig_msp_learning_curves,eval_lpips_last,Seq RC (Ours),4,10,0.22228319384157658
+fig_msp_learning_curves,eval_lpips_last,Seq RC (Ours),4,20,0.21595037914812565
+fig_msp_learning_curves,eval_lpips_last,Seq RC (Ours),4,30,0.21265277173370123
+fig_msp_learning_curves,eval_lpips_last,"Return RC (Ours, full)",0,0,0.22598793730139732
+fig_msp_learning_curves,eval_lpips_last,"Return RC (Ours, full)",0,10,0.21847275458276272
+fig_msp_learning_curves,eval_lpips_last,"Return RC (Ours, full)",0,20,0.21067139972001314
+fig_msp_learning_curves,eval_lpips_last,"Return RC (Ours, full)",0,30,0.20552422665059566
+fig_msp_learning_curves,eval_lpips_last,"Return RC (Ours, full)",1,0,0.22598793730139732
+fig_msp_learning_curves,eval_lpips_last,"Return RC (Ours, full)",1,10,0.2196686826646328
+fig_msp_learning_curves,eval_lpips_last,"Return RC (Ours, full)",1,20,0.20694906171411276
+fig_msp_learning_curves,eval_lpips_last,"Return RC (Ours, full)",1,30,0.2049865610897541
+fig_msp_learning_curves,eval_lpips_last,"Return RC (Ours, full)",2,0,0.22598793730139732
+fig_msp_learning_curves,eval_lpips_last,"Return RC (Ours, full)",2,10,0.21667801402509212
+fig_msp_learning_curves,eval_lpips_last,"Return RC (Ours, full)",2,20,0.20843874663114548
+fig_msp_learning_curves,eval_lpips_last,"Return RC (Ours, full)",2,30,0.20475246291607618
+fig_msp_learning_curves,eval_lpips_last,"Return RC (Ours, full)",3,0,0.22598793730139732
+fig_msp_learning_curves,eval_lpips_last,"Return RC (Ours, full)",3,10,0.2148751448839903
+fig_msp_learning_curves,eval_lpips_last,"Return RC (Ours, full)",3,20,0.2049261573702097
+fig_msp_learning_curves,eval_lpips_last,"Return RC (Ours, full)",3,30,0.20261048898100853
+fig_msp_learning_curves,eval_lpips_last,"Return RC (Ours, full)",4,0,0.22598793730139732
+fig_msp_learning_curves,eval_lpips_last,"Return RC (Ours, full)",4,10,0.2168072611093521
+fig_msp_learning_curves,eval_lpips_last,"Return RC (Ours, full)",4,20,0.21092602983117104
+fig_msp_learning_curves,eval_lpips_last,"Return RC (Ours, full)",4,30,0.209788229316473
+fig_msp_learning_curves,eval_lpips_last,Gain return (Ablation),0,0,0.22598793730139732
+fig_msp_learning_curves,eval_lpips_last,Gain return (Ablation),0,10,0.2161920852959156
+fig_msp_learning_curves,eval_lpips_last,Gain return (Ablation),0,20,0.2063200529664755
+fig_msp_learning_curves,eval_lpips_last,Gain return (Ablation),0,30,0.20071270875632763
+fig_msp_learning_curves,eval_lpips_last,Gain return (Ablation),1,0,0.22598793730139732
+fig_msp_learning_curves,eval_lpips_last,Gain return (Ablation),1,10,0.2188201267272234
+fig_msp_learning_curves,eval_lpips_last,Gain return (Ablation),1,20,0.21181881427764893
+fig_msp_learning_curves,eval_lpips_last,Gain return (Ablation),1,30,0.20954862423241138
+fig_msp_learning_curves,eval_lpips_last,Gain return (Ablation),2,0,0.22598793730139732
+fig_msp_learning_curves,eval_lpips_last,Gain return (Ablation),2,10,0.2176458854228258
+fig_msp_learning_curves,eval_lpips_last,Gain return (Ablation),2,20,0.20827142987400293
+fig_msp_learning_curves,eval_lpips_last,Gain return (Ablation),2,30,0.2045054491609335
+fig_msp_learning_curves,eval_lpips_last,Gain return (Ablation),3,0,0.22598793730139732
+fig_msp_learning_curves,eval_lpips_last,Gain return (Ablation),3,10,0.21308919042348862
+fig_msp_learning_curves,eval_lpips_last,Gain return (Ablation),3,20,0.20784998312592506
+fig_msp_learning_curves,eval_lpips_last,Gain return (Ablation),3,30,0.20343692786991596
+fig_msp_learning_curves,eval_lpips_last,Gain return (Ablation),4,0,0.22598793730139732
+fig_msp_learning_curves,eval_lpips_last,Gain return (Ablation),4,10,0.22311919275671244
+fig_msp_learning_curves,eval_lpips_last,Gain return (Ablation),4,20,0.22137949243187904
+fig_msp_learning_curves,eval_lpips_last,Gain return (Ablation),4,30,0.21785856038331985
+fig_msp_learning_curves,eval_lpips,RLVR checkpoint,eval-only,constant,0.21154583369692165
+fig_msp_learning_curves,eval_lpips_last,RLVR checkpoint,eval-only,constant,0.21547726728022099
+fig_msp_learning_curves,eval_lpips,Base checkpoint,eval-only,constant,0.21570572862401605
+fig_msp_learning_curves,eval_lpips_last,Base checkpoint,eval-only,constant,0.22598793730139732

@@ -71,10 +71,19 @@ mlruns/
 *.pkl
 *.pickle
 
-# Extended abstract deliverable: keep despite the generic doc/image ignores above
-!extended_abstract/**
-
-
 # Local external repositories / temporary outputs
 external/
 tmp/
+paper_rewriting_output/
+
+# LaTeX build products (source and cited figure PDFs are tracked)
+docs/AuthorKit27/*.aux
+docs/AuthorKit27/*.bbl
+docs/AuthorKit27/*.blg
+docs/AuthorKit27/*.fdb_latexmk
+docs/AuthorKit27/*.fls
+docs/AuthorKit27/*.log
+docs/AuthorKit27/*.pdf
+docs/AuthorKit27/Figures/*.png
+docs/AuthorKit27/Figures/*.svg
+docs/AuthorKit27/Figures/*.tiff

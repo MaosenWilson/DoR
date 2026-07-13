@@ -27,16 +27,18 @@ import torch
 from dor.constants import ROOT
 from dor.episodes import list_episodes
 from dor.grpo import _bar, _hms, set_determinism
+from dor.kl import sampled_kl_penalty
 from dor.metrics import Metrics
 from dor.models import load_action_ranges
 from dor.multistep import (detok_chunked, discretize_actions, load_msp, msp_rewards_frame,
                            msp_rollout, msp_sample_windows, msp_token_logp, msp_window,
                            V_MSP)
+from dor.temporal_credit import temporal_return_advantages
 
 
 @torch.no_grad()
 def eval_msp(model, tok, ar, metrics, wins, T, K, dev, seed=999):
-    lp_mean, lp_last, mse_mean = [], [], []
+    lp_mean, lp_last, mse_mean, psnr_mean, ssim_mean = [], [], [], [], []
     for wi, (p, s) in enumerate(wins):
         frames, actions = msp_window(p, s, T, dev)
         with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
@@ -46,29 +48,21 @@ def eval_msp(model, tok, ar, metrics, wins, T, K, dev, seed=999):
         dyn = msp_rollout(model, ctx_off, act_off, T - 1, K, seed=seed + wi)
         pred = detok_chunked(tok, idx_c.expand(K, -1, -1), dyn)
         real_f = frames[1:]
-        lps, mses = [], []
+        lps, mses, psnrs, ssims = [], [], [], []
         for i in range(1, T - 1):
             q = metrics.eval_batch(pred[:, i], real_f[i])
             lps.append(float(np.mean(q["lpips"])))
             mses.append(float(np.mean(q["mse"])))
+            psnrs.append(float(np.mean(q["psnr"])))
+            ssims.append(float(np.mean(q["ssim"])))
         lp_mean.append(float(np.mean(lps)))
         lp_last.append(lps[-1])
         mse_mean.append(float(np.mean(mses)))
+        psnr_mean.append(float(np.mean(psnrs)))
+        ssim_mean.append(float(np.mean(ssims)))
     return {"lpips": float(np.mean(lp_mean)), "lpips_last": float(np.mean(lp_last)),
-            "mse": float(np.mean(mse_mean))}
-
-
-def _discounted_frame_advantage(r_frame, beta):
-    ret = np.zeros_like(r_frame)
-    running = np.zeros(r_frame.shape[0], dtype=np.float64)
-    for t in range(r_frame.shape[1] - 1, -1, -1):
-        running = r_frame[:, t] + beta * running
-        ret[:, t] = running
-    adv = np.zeros_like(ret)
-    for t in range(ret.shape[1]):
-        x = ret[:, t]
-        adv[:, t] = (x - x.mean()) / (x.std() + 1e-6)
-    return adv
+            "mse": float(np.mean(mse_mean)), "psnr": float(np.mean(psnr_mean)),
+            "ssim": float(np.mean(ssim_mean))}
 
 
 def _gain_shaped_rewards(r_frame, alpha):
@@ -86,7 +80,14 @@ def _gain_shaped_rewards(r_frame, alpha):
     return shaped
 
 
-def _temporal_advantages(r_frame, mode, beta, gain_alpha=0.0):
+def _temporal_advantages(
+    r_frame,
+    mode,
+    beta,
+    gain_alpha=0.0,
+    return_horizon=0,
+    control_seed=0,
+):
     """Build sequence or frame-block advantages from per-frame rewards.
 
     r_frame [K,F] follows the MSP convention: frame 0 has no direct reward and is zero.
@@ -109,11 +110,19 @@ def _temporal_advantages(r_frame, mode, beta, gain_alpha=0.0):
         return None, adv, float(scalar.mean())
 
     if mode == "return":
-        return None, _discounted_frame_advantage(r, beta), float(scalar.mean())
+        adv = temporal_return_advantages(r, beta, max_terms=return_horizon)
+        return None, adv, float(scalar.mean())
+
+    if mode == "shuffled_return":
+        adv = temporal_return_advantages(
+            r, beta, max_terms=return_horizon, shuffle_seed=control_seed
+        )
+        return None, adv, float(scalar.mean())
 
     if mode == "gain_return":
         shaped = _gain_shaped_rewards(r, gain_alpha)
-        return None, _discounted_frame_advantage(shaped, beta), float(scalar.mean())
+        adv = temporal_return_advantages(shaped, beta, max_terms=return_horizon)
+        return None, adv, float(scalar.mean())
 
     raise ValueError(f"unknown adv_temporal={mode!r}")
 
@@ -149,7 +158,7 @@ def train_one(reward, seed, args, dev="cuda"):
     train_w, eval_w = allw[:args.train_windows], allw[args.train_windows:]
 
     log = {"step": [], "reward_mean": [], "eval_lpips": [], "eval_lpips_last": [],
-           "eval_mse": []}
+           "eval_mse": [], "eval_psnr": [], "eval_ssim": []}
 
     def _log_eval(step, r_mean=0.0):
         model.eval()
@@ -160,7 +169,8 @@ def train_one(reward, seed, args, dev="cuda"):
         for k, v in e.items():
             log[f"eval_{k}"].append(v)
         print(f"[{reward}/msp] step {step} LPIPS={e['lpips']:.4f} "
-              f"LPIPSlast={e['lpips_last']:.4f} MSE={e['mse']:.5f}", flush=True)
+              f"LPIPSlast={e['lpips_last']:.4f} MSE={e['mse']:.5f} "
+              f"PSNR={e['psnr']:.2f} SSIM={e['ssim']:.4f}", flush=True)
 
     _log_eval(0)
     rng = np.random.default_rng(seed)
@@ -181,10 +191,17 @@ def train_one(reward, seed, args, dev="cuda"):
                                   seed=step * 1000 + int(bi))
                 pred = detok_chunked(tok, idx_c.expand(args.K, -1, -1), dyn)
                 real_f = frames[1:]
-                target_f = detok_chunked(tok, idx_c, idx_d_gt)[0] if reward == "rc" else real_f
-                r_frame = msp_rewards_frame(pred, real_f, target_f, metrics, kind=reward)
+                target_f = (
+                    detok_chunked(tok, idx_c, idx_d_gt)[0]
+                    if reward == "rc" else real_f
+                )
+                base_kind = reward
+                r_frame = msp_rewards_frame(pred, real_f, target_f, metrics, kind=base_kind)
                 adv, adv_frame, r_mean = _temporal_advantages(
-                    r_frame, args.adv_temporal, args.temporal_gamma, args.gain_alpha)
+                    r_frame, args.adv_temporal, args.temporal_gamma, args.gain_alpha,
+                    return_horizon=args.return_horizon,
+                    control_seed=seed * 1_000_000 + step * 1000 + int(bi),
+                )
             model.config.use_cache = False
             tok_logp = msp_token_logp(model, ctx_off, act_off, dyn)
             model.config.use_cache = True
@@ -199,7 +216,8 @@ def train_one(reward, seed, args, dev="cuda"):
                 with torch.no_grad():
                     ref_tok = msp_token_logp(ref, ctx_off, act_off, dyn)
                 hw = _horizon_weights(dyn.shape[1], args.horizon_kl_alpha, dev)
-                pg = pg + args.kl * ((tok_logp - ref_tok) * hw[None, :, None]).mean()
+                kl_tok = sampled_kl_penalty(tok_logp, ref_tok, args.kl_type)
+                pg = pg + args.kl * (kl_tok * hw[None, :, None]).mean()
             (pg / len(idx)).backward()
             r_acc += r_mean; nseq += 1
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
@@ -215,7 +233,9 @@ def train_one(reward, seed, args, dev="cuda"):
     os.makedirs(ckpt, exist_ok=True)
     model.save_pretrained(ckpt)
     print(f"[ckpt] saved {ckpt}", flush=True)
-    del model, tok
+    del model, tok, metrics
+    if ref is not None:
+        del ref
     torch.cuda.empty_cache()
     return log
 
@@ -234,14 +254,22 @@ def main():
     ap.add_argument("--kl", type=float, default=0.001,
                     help="KL coef to the frozen base policy (official multi-step recipe "
                          "uses 0.001; 0 disables and reproduces the diverging v1/v2 setup)")
+    ap.add_argument("--kl_type", default="low_var_kl",
+                    choices=["low_var_kl", "linear"],
+                    help="sampled KL estimator; low_var_kl matches RLVR-World/VERL, "
+                         "while linear only reproduces earlier exploratory runs")
     ap.add_argument("--adv_temporal", default="seq",
-                    choices=["seq", "frame", "return", "gain_return"],
+                    choices=["seq", "frame", "return", "shuffled_return", "gain_return"],
                     help="multi-step advantage granularity: old rollout scalar, per-frame, "
-                         "discounted temporal return, or gain-shaped temporal return")
+                         "discounted temporal return, candidate-shuffled control, or "
+                         "gain-shaped temporal return")
     ap.add_argument("--temporal_gamma", type=float, default=0.95,
                     help="discount beta for --adv_temporal return/gain_return")
     ap.add_argument("--gain_alpha", type=float, default=0.5,
                     help="reward-improvement shaping strength for --adv_temporal gain_return")
+    ap.add_argument("--return_horizon", type=int, default=0,
+                    help="maximum number of future rewards per block; 0 uses the full "
+                         "reward-to-go and positive values form truncation controls")
     ap.add_argument("--horizon_kl_alpha", type=float, default=0.0,
                     help="0 = uniform KL; >0 linearly strengthens KL on later rollout frames")
     ap.add_argument("--eval_every", type=int, default=10)
@@ -269,6 +297,9 @@ def main():
         return
 
     rewards = [r.strip() for r in args.rewards.split(",") if r.strip()]
+    unknown = sorted(set(rewards) - {"raw", "rc"})
+    if unknown:
+        raise ValueError(f"unknown rewards: {unknown}")
     seeds = [int(s) for s in args.seeds.split(",") if s.strip()]
     combos = [(r, s) for s in seeds for r in rewards]
     done = 0

@@ -1,117 +1,58 @@
-# Related Work 中文工作稿
+# Related Work 中文正式工作稿
 
-> 标题：**RC-GRPO: Reconstruction-Calibrated Temporal Credit Assignment for Tokenized Video World Models**
+> 文献必须在 BibTeX 和原文中逐条核验。下列 arXiv/会议条目均为已检索到的真实来源；正式 tex 只使用已经进入 bibliography 的 citation keys。
 
-## 0. 写作定位
+## 1. Tokenized Video World Models
 
-Related Work 的目标不是堆引用，而是让审稿人快速确认三件事：
+VideoGPT、iVideoGPT 等方法把视频压缩为离散或连续视觉 tokens，再以自回归模型学习 action-conditioned future prediction。Tokenization 提高了序列建模效率，但生成结果被限制在 codec 的可达输出空间，重建质量由 tokenizer rate-distortion trade-off 限制。已有研究通常把 reconstruction quality 作为 tokenizer 的表示能力问题；本文关注一个不同后果：冻结 codec 的不可达 raw target 如何影响 decoded verifier 给出的 candidate ordering。
 
-1. 我们基于已有 tokenized video world model / RLVR-World 框架，不声称重做世界模型架构。
-2. 我们的问题不是“提出更多 reward 指标”，而是 tokenized verifier 的 reachable target mismatch。
-3. 我们的 GRPO 侧贡献不是通用 optimizer 替换，而是 multi-step video rollout 中的 frame-block temporal credit assignment。
+应保留并核验的代表性来源：
 
-因此本节采用 4 个主题：
+- VideoGPT；
+- iVideoGPT；
+- Phenaki / MAGVIT 类 tokenized video generation；
+- FSQ；
+- rate-distortion / neural compression 基础来源。
 
-> tokenized video world models → verifiable reward post-training → visual tokenizers and metrics → fine-grained credit assignment
+## 2. RLVR for World Models
 
-每个主题最后都要落到本文差异。
+RLVR-World（Wu et al., NeurIPS 2025，arXiv:2505.13934）把语言和视频世界建模统一为序列预测，并以任务指标作为 verifiable rewards。其视频实验对 decoded predictions 使用 MSE、LPIPS 等 full-reference metrics，再由 GRPO 更新 token policy。我们的工作保持该基础流程、模型和 evaluator，不提出新的通用 RLVR 框架；区别在于分析 decoded verifier 的 reachable-target mismatch，并重新设计 multi-step frame-block credit。
 
-## 1. 段落地图
+需要明确避免的表述：
 
-### P1. Tokenized video world models
+- 不说 RLVR-World “reward 错了”；它的 reward 对 raw-frame fidelity 是合法 evaluator；
+- 不把复用其架构写成贡献；
+- 不把我们的 held-out protocol 结果写成复现并击败官方完整训练设置。
 
-要讲：
+## 3. Perceptual Metrics and Codec Reconstruction
 
-- World model 从 latent dynamics / model-based RL 到 video generative simulator。
-- Tokenized video world model 把 future prediction 转成 sequence modeling。
-- iVideoGPT、DWS、Genie、MAGVIT/VideoGPT 等支撑这一背景。
+MSE、SSIM/MS-SSIM、LPIPS、DISTS、GMSD、FSIM 和 HaarPSI 从像素、结构和 learned feature 等角度测量 full-reference fidelity。LPIPS/DINO 等 feature-level metric 若在 decoded image 上计算，仍属于 post-decode evaluation；“像素 vs 特征”不等于“有无 codec floor”。FID/FVD/KID 等 distributional metrics 是集合统计，不能直接替代 RLVR 所需的 per-candidate reward。
 
-落点：
+本文不以增加 metric 数量作为创新。额外 post-decode metrics、pre-decode code/gradient、learned fusion、adaptive guard 与 local-floor pooling 均未超过最小 RC verifier；这些结果只界定当前设置的边界。
 
-> 这些工作主要关注模型架构、预训练和仿真能力；本文关注的是预训练之后，用 verifiable rewards 微调 tokenized video world model 时训练信号是否可靠。
+## 4. Fine-Grained Credit Assignment in Visual GRPO
 
-建议引用：
+Flow-GRPO 将 GRPO 引入 flow-matching generation，但初始方法通常把最终 outcome reward 广播到整条 denoising trajectory。2026 年的工作开始研究 step-aware credit：
 
-`worldmodels`, `rssm`, `dreamerv2`, `dreamerv3`, `videogpt`, `magvit`, `ivideogpt`, `genie`, `dws`
+- Stepwise-Flow-GRPO，*Stepwise Credit Assignment for GRPO on Flow-Matching Models*，arXiv:2603.28718；
+- TurningPoint-GRPO，*Alleviating Sparse Rewards by Modeling Step-Wise and Long-Term Sampling Effects in Flow-Based GRPO*，arXiv:2602.06422，公开 demo code；
+- OTCA，*Learning to Credit the Right Steps: Objective-aware Process Optimization for Visual Generation*，arXiv:2604.19234；
+- SAGE-GRPO，针对 video diffusion exploration reliability 与 stepwise constraints，公开代码。
 
-### P2. Verifiable reward post-training and GRPO
+这些工作支持细粒度 credit 的必要性，但研究对象主要是 diffusion/flow denoising steps。我们的 temporal units 是 action-conditioned autoregressive future frames：早期 frame tokens 会成为后续预测条件，逐帧 reward 也可以直接对真实 future frames 验证。我们进一步把 frozen codec 引起的 rank reliability 与 temporal credit 联系起来。
 
-要讲：
+## 5. Reliability-Aware Policy Optimization
 
-- RLVR-World 把 world model 后训练转成 sample group + verifiable reward + GRPO。
-- GRPO/RLVR 在 LLM reasoning 中常见，不依赖 learned value function。
-- 相关 GRPO/RLVR 变体很多，但大多关注优化目标、clip、sample efficiency 或 sequence-level stability。
+AdaGRPO（arXiv:2606.08480）等工作根据 reward discriminability 或样本可靠性选择性施加 GRPO，说明可计算 reward 在不同样本上不一定同样可信。我们的 Rank-Reliable Return 候选与其共享“按可靠性分配优化压力”的原则，但可靠性来源不同：我们使用 tokenized video verifier 的 horizon-wise pairwise flip probability，而不是推荐 ranker 或 policy difficulty。
 
-落点：
+目前没有检索到直接使用
 
-> 本文不把问题定义为通用 GRPO optimizer 选择，而是指出 tokenized video verifier 本身会把 decoder-side residual 带入组内排序；因此需要先校准 reward target。
+$$
+1-2\arccos(\rho_h)/\pi
+$$
 
-建议引用：
+调制 autoregressive video temporal returns 的论文或代码。因此该组合若验证成功可作为新方法；若失败，不得借相邻文献包装成已有方法的必然延伸。
 
-`rlvrworld`, `grpo`, `deepseekr1`, `drgrpo`, `dapo`, `gspo`, `realrlvr`, `sapo`
+## 6. Positioning Summary
 
-### P3. Visual tokenizers, reconstruction limits, and evaluation metrics
-
-要讲：
-
-- VQ-VAE/VQGAN/FSQ 等视觉 tokenizer 都有 encode-decode reconstruction limit。
-- Perception-distortion tradeoff 提供“重建上限/感知质量”的背景。
-- SSIM/LPIPS/MSE 是 full-reference per-sample metrics；FID/KID/FVD/DINO/PRDC 是 distribution-level metrics。
-
-落点：
-
-> 既有评价指标主要用于报告生成质量；本文关心的是这些指标被放进 GRPO group ranking 后会发生什么。尤其 distribution-level metrics 不能直接作为 per-candidate verifier，而 post-decode full-reference metrics 又会继承 tokenizer floor。
-
-建议引用：
-
-`vqvae`, `vqgan`, `fsq`, `perceptiondistortion`, `ssim`, `lpips`, `fid`, `kid`, `fvd`, `dinov2`, `densitycoverage`, `precisionrecall`
-
-### P4. Fine-grained credit assignment for GRPO-style training
-
-要讲：
-
-- Sequence-level advantage 对长序列生成过粗，这一点在 LLM reasoning、segment-level VLM generation、flow/diffusion generation 中都被观察到。
-- 代表工作包括 GRPO-\(\lambda\)、SPO、SD-GRPO、Stepwise-Flow-GRPO、DAPO 等。
-
-落点：
-
-> 我们借鉴的是“coarse sequence-level credit 不够”的原则，但不是照搬 token-level 或 denoising-step credit。tokenized video 的自然信用单元是 future-frame token block，reward 是 frame-level full-reference verifier，且 verifier 先经过 reachable-target calibration。
-
-建议引用：
-
-`grpolambda`, `spo`, `sdgrpo`, `stepwiseflowgrpo`, `dapo`
-
-## 2. 正式中文 Related Work v1
-
-### Tokenized video world models
-
-世界模型通过学习环境动态，为机器人控制、交互式仿真和模型式强化学习提供可采样的未来状态预测。早期工作主要在 latent dynamics 中建模环境状态转移，后来的视频生成式世界模型进一步把视觉预测本身作为建模目标。随着视觉 tokenizer 和 transformer 视频生成模型的发展，tokenized video world model 成为一种自然路线：图像帧被压缩为离散 token，未来视觉状态由自回归序列模型预测，再通过 decoder 映射回像素空间。iVideoGPT、Genie、DWS 等工作表明，预训练视频生成模型可以作为可交互的世界模拟器。然而，这些工作主要回答“如何预训练或构建一个可采样的视频世界模型”，而本文关注预训练之后的另一个问题：当这类模型用 verifiable reward 和 GRPO 进行后训练时，reward target 与 credit assignment 是否仍然匹配 tokenized video 的结构。
-
-### Verifiable reward post-training and GRPO
-
-基于可验证奖励的后训练框架把世界模型微调转化为一个 group-relative optimization 问题：对同一上下文采样多个候选未来帧，用已知真实帧计算 verifiable reward，再根据组内相对优势更新策略。RLVR-World 将这一思想应用到 world model 训练中，GRPO 则提供了无需 learned value function 的组内归一化更新形式。相关 RLVR/GRPO 变体进一步讨论了采样效率、clip 策略、长度偏置、classification-style rank labels 或大规模 reasoning 训练中的稳定性。本文与这些通用优化器改造不同：我们发现，在 tokenized video world model 中，即使优化器本身不变，post-decode verifier 也可能因为 tokenizer-decoder 的不可达误差而腐蚀组内排序。因此，有效干预点首先是 verifier target 的 reconstruction calibration，而不是简单替换 GRPO 目标函数。
-
-### Visual tokenizers, reconstruction limits, and evaluation metrics
-
-视觉 tokenizer 是 tokenized generation 的基础，但 lossy tokenization 不可避免会引入 encode-decode 重建残差。VQ-VAE、VQGAN 和 FSQ 等离散表示学习方法提高了图像或视频 tokenization 的可建模性，perception-distortion tradeoff 也说明了重建误差与感知质量之间的基本张力。在评价层面，SSIM、LPIPS 等 full-reference metrics 常用于逐样本保真度，FID、KID、FVD、DINO 特征距离、precision/recall 和 density/coverage 等指标则用于集合或分布层面的生成质量。本文不是重新提出一个视觉评价指标，而是研究这些指标被用作 GRPO verifier 时的训练后果：distribution-level metrics 不能直接给单个候选提供标准 per-sample reward，而 post-decode full-reference metrics 会继承 tokenizer reconstruction floor，并可能改变 GRPO 所依赖的候选排序。
-
-### Fine-grained credit assignment for GRPO-style training
-
-长序列强化微调中的一个共同问题是 sequence-level advantage 过粗：当一条生成轨迹包含多个语义步骤、推理段或生成阶段时，把同一个标量优势广播到所有 token 会混淆局部决策的责任。近期 GRPO-style 工作从不同角度讨论了这一问题，包括 eligibility-trace 式 token credit、segment-level policy optimization、vision-language long-form generation 的 segment decomposition、flow/diffusion generation 中的 stepwise credit assignment，以及大规模 RL 系统中的 token-level loss shaping。本文借鉴这一原则，但具体落点不同。tokenized video rollout 的自然信用单元不是文本 token、reasoning segment 或 denoising step，而是一个 future frame 对应的 visual-token block；同时，每个 block 的 reward 来自 frame-level full-reference verifier，并且 verifier target 需要先经过 reconstruction calibration。因此，RC-GRPO 将细粒度 credit assignment 本地化为 reconstruction-calibrated temporal return，而不是提出一个任务无关的通用 GRPO optimizer。
-
-## 3. 英文 LaTeX 映射
-
-LaTeX 中使用一个 `\section{Related Work}`，内部用 4 个 `\paragraph{...}`：
-
-1. `Tokenized video world models.`
-2. `Verifiable reward post-training.`
-3. `Visual tokenizers and evaluation metrics.`
-4. `Fine-grained credit assignment.`
-
-边界：
-
-- 不声称我们提出新的 video world model 架构。
-- 不声称我们提出新的视觉评价指标。
-- 不声称我们提出通用 GRPO optimizer。
-- 不把负结果写成 related work 主线，只用来限定“generic optimizer swap”不是本文主张。
-
+本文位于三条工作线的交叉点：tokenized video world models 提供冻结 codec 与 action-conditioned rollout；RLVR-World 提供 decoded verifier 和 GRPO 后训练；stepwise visual GRPO 提供细粒度 temporal credit 的近期背景。我们的特定问题是：**当 decoded reward 的 group-relative ranking 受 codec 与 horizon 共同影响时，如何校准 verifier 并分配可信的 future-frame credit。**

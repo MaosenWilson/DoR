@@ -39,9 +39,36 @@ from dor.tokenization import decode_tokens, encode_feature_map, encode_indices
 
 ARMS = ("pixel", "mse", "ssim", "floor", "floorpc", "multi", "phi", "code", "hybrid",
         "a0faithful", "dorw", "pixel_tok", "ssim_tok", "mse_tok", "hybrid_tok",
-        "code_dyn", "pixel_tok_dyn")
+        "code_dyn", "pixel_tok_dyn", "a0faithful_tok",
+        "rcmg", "rcmg_pre", "rcmg_post", "rcmg_nocode", "rcmg_nograd",
+        "rcmg_nodyn", "rcmg_nolpips", "rcmg_nomse", "rcmg_nossim",
+        "rankcal_equal", "rankcal_post", "rankcal_full", "rankcal_nocode",
+        "rankcal_nograd", "mrrt", "mrrt_random")
+
+RCMG_PRE = ("code", "grad", "dyn")
+RCMG_POST = ("lpips", "mse", "ssim")
+RCMG_ACTIVE = {
+    "rcmg": RCMG_PRE + RCMG_POST,
+    "rcmg_pre": RCMG_PRE,
+    "rcmg_post": RCMG_POST,
+    "rcmg_nocode": ("grad", "dyn") + RCMG_POST,
+    "rcmg_nograd": ("code", "dyn") + RCMG_POST,
+    "rcmg_nodyn": ("code", "grad") + RCMG_POST,
+    "rcmg_nolpips": RCMG_PRE + ("mse", "ssim"),
+    "rcmg_nomse": RCMG_PRE + ("lpips", "ssim"),
+    "rcmg_nossim": RCMG_PRE + ("lpips", "mse"),
+}
 
 _WEIGHTS = None
+_RANKCAL_CACHE = {}
+
+RANKCAL_COMPONENTS = ("lpips", "mse", "ssim", "code", "grad")
+RANKCAL_MODELS = {
+    "rankcal_post": "post",
+    "rankcal_full": "full",
+    "rankcal_nocode": "nocode",
+    "rankcal_nograd": "nograd",
+}
 
 
 def load_weights(path=None):
@@ -59,6 +86,24 @@ def load_weights(path=None):
         if _WEIGHTS is None:
             raise FileNotFoundError("reward_weights.json not found; run scripts/compute_reward_weights.py first")
     return _WEIGHTS
+
+
+def load_rankcal_weights(path=None):
+    """Load frozen calibration weights; cache separately for each explicit path."""
+    resolved = path or f"{ROOT}/configs/aaai2027/rank_reward_weights.json"
+    resolved = os.path.abspath(resolved)
+    if resolved not in _RANKCAL_CACHE:
+        if not os.path.exists(resolved):
+            raise FileNotFoundError(
+                f"rank-calibrated weights not found: {resolved}; run "
+                "scripts/calibrate_rank_reward.py first"
+            )
+        with open(resolved) as handle:
+            payload = json.load(handle)
+        if payload.get("normalization") != "within_group_zscore":
+            raise ValueError("rank reward weights use an incompatible normalization")
+        _RANKCAL_CACHE[resolved] = payload
+    return _RANKCAL_CACHE[resolved]
 
 
 def phi_rms(tok, imgs, gt):
@@ -97,9 +142,139 @@ def code_delta_reward(tok, cand, gt_idx, cur_idx, *, gamma=0.25, tau=0.0):
     return (cos - float(gamma) * mag).detach().cpu().numpy()
 
 
+def code_gradient_reward(tok, cand, gt_idx):
+    """Local spatial-structure fidelity in the decoder-free FSQ code map.
+
+    The global code RMS compares absolute code values. This term instead compares
+    first-order horizontal/vertical differences, so it measures local relations on
+    the 16x20 code grid without decoding either candidate or target.
+    """
+    k = cand.shape[0]
+    zc = tok.indices_to_codes(cand.reshape(k, *gt_idx.shape[-2:])).float()
+    zg = tok.indices_to_codes(gt_idx).float()
+    dh = (zc[:, :, :, 1:] - zc[:, :, :, :-1]) - (zg[:, :, :, 1:] - zg[:, :, :, :-1])
+    dv = (zc[:, :, 1:, :] - zc[:, :, :-1, :]) - (zg[:, :, 1:, :] - zg[:, :, :-1, :])
+    sq_sum = dh.square().flatten(1).sum(1) + dv.square().flatten(1).sum(1)
+    count = dh[0].numel() + dv[0].numel()
+    return -(sq_sum / max(count, 1)).sqrt().detach().cpu().numpy()
+
+
+def _mean_component_zscores(components, names):
+    """Equal-weight mean after within-group standardisation."""
+    if not names:
+        raise ValueError("cannot fuse an empty reward domain")
+    return np.mean([_zscore(components[name]) for name in names], axis=0)
+
+
+def fuse_rcmg_components(kind, components, *, pre_weight=0.5):
+    """Fuse precomputed MG-RC components; separated for exact ablation tests."""
+    active = RCMG_ACTIVE[kind]
+    pre_names = tuple(name for name in RCMG_PRE if name in active)
+    post_names = tuple(name for name in RCMG_POST if name in active)
+    r_pre = _mean_component_zscores(components, pre_names) if pre_names else None
+    r_post = _mean_component_zscores(components, post_names) if post_names else None
+    if r_pre is None:
+        return r_post
+    if r_post is None:
+        return r_pre
+    w = float(pre_weight)
+    if not 0.0 <= w <= 1.0:
+        raise ValueError(f"rcmg pre_weight must be in [0,1], got {w}")
+    return w * r_pre + (1.0 - w) * r_post
+
+
+def fuse_rankcal_components(kind, components, *, weights_payload=None):
+    """Fuse higher-is-better components with frozen simplex weights."""
+    if kind == "rankcal_equal":
+        names = RANKCAL_COMPONENTS
+        weights = np.full(len(names), 1.0 / len(names), dtype=np.float64)
+    else:
+        if kind not in RANKCAL_MODELS:
+            raise ValueError(f"unknown rank-calibrated reward {kind!r}")
+        if weights_payload is None:
+            raise ValueError("rank-calibrated reward needs a weights payload")
+        model = weights_payload["models"][RANKCAL_MODELS[kind]]
+        names = tuple(model["components"])
+        weights = np.asarray(model["weights"], dtype=np.float64)
+    if len(names) != len(weights) or not np.isfinite(weights).all():
+        raise ValueError("invalid rank-calibrated component weights")
+    if np.any(weights < -1e-9) or not np.isclose(weights.sum(), 1.0, atol=1e-6):
+        raise ValueError("rank-calibrated weights must be non-negative and sum to one")
+    missing = set(names) - set(components)
+    if missing:
+        raise KeyError(f"missing rank-calibrated components: {sorted(missing)}")
+    return np.sum(
+        [weight * _zscore(components[name]) for name, weight in zip(names, weights)], axis=0
+    )
+
+
+def rankcal_reward(kind, metrics, tok, cand, imgs, gt_idx, *, weights_path=None):
+    """Five-component, motion-free reward against the tokenizer-reachable target."""
+    payload = None if kind == "rankcal_equal" else load_rankcal_weights(weights_path)
+    if kind == "rankcal_equal":
+        active = RANKCAL_COMPONENTS
+    else:
+        active = tuple(payload["models"][RANKCAL_MODELS[kind]]["components"])
+    reachable = decode_tokens(tok, gt_idx.reshape(1, -1))[0]
+    q = metrics.eval_batch(imgs, reachable)
+    if "ssim" not in q:
+        raise RuntimeError("rank-calibrated reward needs piqa SSIM (pip install piqa)")
+    components = {
+        "lpips": -np.asarray(q["lpips"], dtype=float),
+        "mse": -np.asarray(q["mse"], dtype=float),
+        "ssim": np.asarray(q["ssim"], dtype=float),
+    }
+    if "code" in active:
+        components["code"] = -np.asarray(code_rms(tok, cand, gt_idx), dtype=float)
+    if "grad" in active:
+        components["grad"] = np.asarray(code_gradient_reward(tok, cand, gt_idx), dtype=float)
+    return fuse_rankcal_components(kind, components, weights_payload=payload)
+
+
+def rcmg_reward(kind, metrics, tok, cand, imgs, gt_idx, cur_idx, *,
+                pre_weight=0.5, dyn_gamma=0.25, dyn_tau=0.0):
+    """Multi-granular reconstruction-calibrated reward and leave-one-out arms.
+
+    Pre-decode domain: global code fidelity, local code-gradient structure, and
+    code-space motion residual. Post-decode domain: LPIPS/MSE/SSIM against the
+    tokenizer-reachable target decode(encode(gt)). Components are z-scored inside
+    the current candidate group, averaged inside each domain, then fused with one
+    fixed domain weight. Removing a component automatically renormalises the
+    remaining domain average.
+    """
+    active = RCMG_ACTIVE[kind]
+    post_names = tuple(name for name in RCMG_POST if name in active)
+    components = {}
+
+    if "code" in active:
+        components["code"] = -np.asarray(code_rms(tok, cand, gt_idx), dtype=float)
+    if "grad" in active:
+        components["grad"] = np.asarray(code_gradient_reward(tok, cand, gt_idx), dtype=float)
+    if "dyn" in active:
+        components["dyn"] = np.asarray(
+            code_delta_reward(tok, cand, gt_idx, cur_idx, gamma=dyn_gamma, tau=dyn_tau),
+            dtype=float,
+        )
+
+    if post_names:
+        reachable = decode_tokens(tok, gt_idx.reshape(1, -1))[0]
+        q = metrics.eval_batch(imgs, reachable)
+        if "lpips" in active:
+            components["lpips"] = -np.asarray(q["lpips"], dtype=float)
+        if "mse" in active:
+            components["mse"] = -np.asarray(q["mse"], dtype=float)
+        if "ssim" in active:
+            if "ssim" not in q:
+                raise RuntimeError("MG-RC SSIM component needs piqa installed (pip install piqa)")
+            components["ssim"] = np.asarray(q["ssim"], dtype=float)
+
+    return fuse_rcmg_components(kind, components, pre_weight=pre_weight)
+
+
 def gt_reward(kind, metrics, tok, cand, imgs, gt, gt_idx, *, alpha=0.5, phi_tok=0.0,
               weight_temp=1.0, cur_idx=None, dyn_lambda=0.25, dyn_gamma=0.25,
-              dyn_tau=0.0):
+              dyn_tau=0.0, rcmg_pre_weight=0.5, rankcal_weights_path=None,
+              reachable_target_idx=None):
     """Verifiable GT reward r_gt [K] (higher == closer to GT), never consensus-shaped.
 
     Args mirror `dor.grpo.gt_reward` plus:
@@ -107,23 +282,43 @@ def gt_reward(kind, metrics, tok, cand, imgs, gt, gt_idx, *, alpha=0.5, phi_tok=
       weight_temp: temperature on the floor-aware weights w_m^tau for the 'dorw' arm
                    (tau=0 -> equal weight; tau=1 -> designed; large -> hard gating).
     """
+    if kind == "rankcal_equal" or kind in RANKCAL_MODELS:
+        return rankcal_reward(
+            kind, metrics, tok, cand, imgs, gt_idx, weights_path=rankcal_weights_path
+        )
+    if kind in RCMG_ACTIVE:
+        return rcmg_reward(
+            kind, metrics, tok, cand, imgs, gt_idx, cur_idx,
+            pre_weight=rcmg_pre_weight, dyn_gamma=dyn_gamma, dyn_tau=dyn_tau,
+        )
     if kind in ("code", "code_dyn"):
         r_code = -code_rms(tok, cand, gt_idx)
         if kind == "code":
             return r_code
         r_dyn = code_delta_reward(tok, cand, gt_idx, cur_idx, gamma=dyn_gamma, tau=dyn_tau)
         return _zscore(r_code) + float(dyn_lambda) * _zscore(r_dyn)
+    if kind in ("mrrt", "mrrt_random"):
+        if reachable_target_idx is None:
+            raise ValueError(f"{kind} reward requires a cached reachable_target_idx")
+        target = decode_tokens(tok, reachable_target_idx.reshape(1, -1))[0]
+        q_target = metrics.eval_batch(imgs, target)
+        return -(
+            np.asarray(q_target["mse"], dtype=float)
+            + np.asarray(q_target["lpips"], dtype=float)
+        )
     if kind == "phi":
         return -phi_rms(tok, imgs, gt)
-    if kind in ("pixel_tok", "pixel_tok_dyn", "ssim_tok", "mse_tok"):
+    if kind in ("pixel_tok", "pixel_tok_dyn", "ssim_tok", "mse_tok", "a0faithful_tok"):
         # FLOOR-CANCELLED reward: compare to the ACHIEVABLE target decode(encode(gt)),
         # not raw gt. The decoder's systematic floor is shared by decode(cand) and
         # decode(encode(gt)) -> cancels, leaving the content/dynamics difference. The
         # token-optimal candidate gets ~0 (floor removed), unlike vs-raw-gt.
         # mse_tok probes whether the cancellation gain scales with the metric's floor
         # (MSE has a small floor -> expect a small gain; LPIPS large -> large gain).
-        rec_gt = decode_tokens(tok, encode_indices(tok, gt.unsqueeze(0)).reshape(1, -1))[0]  # [3,H,W]
+        rec_gt = decode_tokens(tok, gt_idx.reshape(1, -1))[0]  # [3,H,W]
         qt = metrics.eval_batch(imgs, rec_gt)
+        if kind == "a0faithful_tok":
+            return -(np.asarray(qt["mse"], float) + np.asarray(qt["lpips"], float))
         if kind in ("pixel_tok", "pixel_tok_dyn"):
             r_pix = -np.asarray(qt["lpips"], float)
             if kind == "pixel_tok":
