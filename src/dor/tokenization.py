@@ -41,6 +41,11 @@ def encode_feature_map(tok, frames):
 @torch.no_grad()
 def decode_tokens(tok, vis_tokens):
     """vis_tokens [N,320] long -> images [N,3,256,320] in [0,1]."""
+    if vis_tokens.ndim != 2 or vis_tokens.shape[1] != TPF:
+        raise ValueError(
+            "decode_tokens expects one complete visual-token grid per candidate: "
+            f"shape [N, {TPF}], got {tuple(vis_tokens.shape)}"
+        )
     idx = vis_tokens.clamp(0, VTOK - 1).long().reshape(-1, 1, GRID[0], GRID[1])
     with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
         dec = tok.decode(idx)          # [N,1,3,256,320]

@@ -27,6 +27,10 @@ import torch
 from dor.constants import ROOT
 from dor.episodes import list_episodes
 from dor.grpo import _bar, _hms, set_determinism
+from dor.gradient_constraints import (
+    accumulate_parameter_gradients,
+    project_to_primary_progress,
+)
 from dor.kl import sampled_kl_penalty
 from dor.metrics import Metrics
 from dor.models import load_action_ranges
@@ -134,6 +138,14 @@ def _horizon_weights(F, alpha, dev):
     return 1.0 + alpha * t
 
 
+def _policy_loss(tok_logp, adv, adv_frame, temporal_mode, dev):
+    if temporal_mode == "seq":
+        adv_t = torch.as_tensor(adv, device=dev, dtype=torch.float32)
+        return -(adv_t * tok_logp.sum(dim=(1, 2))).mean()
+    adv_tok = torch.as_tensor(adv_frame, device=dev, dtype=torch.float32)
+    return -((adv_tok[:, :, None] * tok_logp).sum(dim=(1, 2))).mean()
+
+
 def train_one(reward, seed, args, dev="cuda"):
     if args.deterministic:
         set_determinism(seed)
@@ -142,6 +154,7 @@ def train_one(reward, seed, args, dev="cuda"):
     ar = load_action_ranges(dev)
     metrics = Metrics(dev)
     opt = torch.optim.AdamW(model.parameters(), lr=args.lr)
+    parameters = tuple(parameter for parameter in model.parameters() if parameter.requires_grad)
     ref = None
     if args.kl > 0:
         # KL anchor to the base policy -- the official RLVR-World multi-step recipe uses
@@ -159,6 +172,13 @@ def train_one(reward, seed, args, dev="cuda"):
 
     log = {"step": [], "reward_mean": [], "eval_lpips": [], "eval_lpips_last": [],
            "eval_mse": [], "eval_psnr": [], "eval_ssim": []}
+    if reward == "ra_rc":
+        for name in (
+            "train_constraint_active", "train_projection_coefficient",
+            "train_gradient_cosine", "train_preferred_progress_ratio",
+            "train_projected_progress_ratio",
+        ):
+            log[name] = []
 
     def _log_eval(step, r_mean=0.0):
         model.eval()
@@ -179,6 +199,7 @@ def train_one(reward, seed, args, dev="cuda"):
         idx = rng.integers(0, len(train_w), size=args.batch_windows)
         opt.zero_grad()
         r_acc, nseq = 0.0, 0
+        projection_rows = []
         for bi in idx:
             p, s = train_w[bi]
             frames, actions = msp_window(p, s, args.T, dev)
@@ -191,43 +212,105 @@ def train_one(reward, seed, args, dev="cuda"):
                                   seed=step * 1000 + int(bi))
                 pred = detok_chunked(tok, idx_c.expand(args.K, -1, -1), dyn)
                 real_f = frames[1:]
-                target_f = (
-                    detok_chunked(tok, idx_c, idx_d_gt)[0]
-                    if reward == "rc" else real_f
-                )
-                base_kind = reward
-                r_frame = msp_rewards_frame(pred, real_f, target_f, metrics, kind=base_kind)
-                adv, adv_frame, r_mean = _temporal_advantages(
-                    r_frame, args.adv_temporal, args.temporal_gamma, args.gain_alpha,
-                    return_horizon=args.return_horizon,
-                    control_seed=seed * 1_000_000 + step * 1000 + int(bi),
-                )
+                if reward == "ra_rc":
+                    reachable_f = detok_chunked(tok, idx_c, idx_d_gt)[0]
+                    raw_frame = msp_rewards_frame(
+                        pred, real_f, real_f, metrics, kind="raw"
+                    )
+                    rc_frame = msp_rewards_frame(
+                        pred, real_f, reachable_f, metrics, kind="rc"
+                    )
+                    raw_adv, raw_adv_frame, _ = _temporal_advantages(
+                        raw_frame, args.adv_temporal, args.temporal_gamma,
+                        args.gain_alpha, return_horizon=args.return_horizon,
+                        control_seed=seed * 1_000_000 + step * 1000 + int(bi),
+                    )
+                    rc_adv, rc_adv_frame, r_mean = _temporal_advantages(
+                        rc_frame, args.adv_temporal, args.temporal_gamma,
+                        args.gain_alpha, return_horizon=args.return_horizon,
+                        control_seed=seed * 1_000_000 + step * 1000 + int(bi),
+                    )
+                else:
+                    target_f = (
+                        detok_chunked(tok, idx_c, idx_d_gt)[0]
+                        if reward == "rc" else real_f
+                    )
+                    r_frame = msp_rewards_frame(
+                        pred, real_f, target_f, metrics, kind=reward
+                    )
+                    adv, adv_frame, r_mean = _temporal_advantages(
+                        r_frame, args.adv_temporal, args.temporal_gamma,
+                        args.gain_alpha, return_horizon=args.return_horizon,
+                        control_seed=seed * 1_000_000 + step * 1000 + int(bi),
+                    )
             model.config.use_cache = False
             tok_logp = msp_token_logp(model, ctx_off, act_off, dyn)
             model.config.use_cache = True
-            if args.adv_temporal == "seq":
-                adv_t = torch.tensor(adv, device=dev, dtype=torch.float32)
-                logp_sum = tok_logp.sum(dim=(1, 2))
-                pg = -(adv_t * logp_sum).mean()
-            else:
-                adv_tok = torch.tensor(adv_frame, device=dev, dtype=torch.float32)
-                pg = -((adv_tok[:, :, None] * tok_logp).sum(dim=(1, 2))).mean()
+            kl_loss = None
             if ref is not None:
                 with torch.no_grad():
                     ref_tok = msp_token_logp(ref, ctx_off, act_off, dyn)
                 hw = _horizon_weights(dyn.shape[1], args.horizon_kl_alpha, dev)
                 kl_tok = sampled_kl_penalty(tok_logp, ref_tok, args.kl_type)
-                pg = pg + args.kl * (kl_tok * hw[None, :, None]).mean()
-            (pg / len(idx)).backward()
+                kl_loss = args.kl * (kl_tok * hw[None, :, None]).mean()
+            if reward == "ra_rc":
+                raw_pg = _policy_loss(
+                    tok_logp, raw_adv, raw_adv_frame, args.adv_temporal, dev
+                )
+                rc_pg = _policy_loss(
+                    tok_logp, rc_adv, rc_adv_frame, args.adv_temporal, dev
+                )
+                raw_gradients = torch.autograd.grad(
+                    raw_pg, parameters, retain_graph=True, allow_unused=True
+                )
+                rc_gradients = torch.autograd.grad(
+                    rc_pg,
+                    parameters,
+                    retain_graph=kl_loss is not None,
+                    allow_unused=True,
+                )
+                projected, projection = project_to_primary_progress(
+                    raw_gradients, rc_gradients
+                )
+                accumulate_parameter_gradients(
+                    parameters, projected, scale=1.0 / len(idx)
+                )
+                if kl_loss is not None:
+                    (kl_loss / len(idx)).backward()
+                projection_rows.append(projection)
+            else:
+                pg = _policy_loss(
+                    tok_logp, adv, adv_frame, args.adv_temporal, dev
+                )
+                if kl_loss is not None:
+                    pg = pg + kl_loss
+                (pg / len(idx)).backward()
             r_acc += r_mean; nseq += 1
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         opt.step()
+        if reward == "ra_rc":
+            log["train_constraint_active"].append(float(np.mean([
+                row["constraint_active"] for row in projection_rows
+            ])))
+            for key, log_name in (
+                ("coefficient", "train_projection_coefficient"),
+                ("gradient_cosine", "train_gradient_cosine"),
+                ("preferred_progress_ratio", "train_preferred_progress_ratio"),
+                ("projected_progress_ratio", "train_projected_progress_ratio"),
+            ):
+                log[log_name].append(float(np.mean([row[key] for row in projection_rows])))
         if step % args.eval_every == 0 or step == args.steps:
             _log_eval(step, r_acc / max(nseq, 1))
             el = time.time() - t0
             print(f"[{reward}/msp] {_bar(step / args.steps)} {step}/{args.steps} "
                   f"elapsed={_hms(el)} eta={_hms(el / step * (args.steps - step))} "
-                  f"r={r_acc / max(nseq, 1):.4f}", flush=True)
+                  f"r={r_acc / max(nseq, 1):.4f}"
+                  + (
+                      f" active={np.mean([row['constraint_active'] for row in projection_rows]):.2f} "
+                      f"cos={np.mean([row['gradient_cosine'] for row in projection_rows]):+.3f} "
+                      f"rawProg={np.mean([row['projected_progress_ratio'] for row in projection_rows]):.3f}"
+                      if reward == "ra_rc" else ""
+                  ), flush=True)
 
     ckpt = os.path.join(args.out_dir, "ckpt", f"{reward}_msp_s{seed}")
     os.makedirs(ckpt, exist_ok=True)
@@ -242,7 +325,7 @@ def train_one(reward, seed, args, dev="cuda"):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--rewards", default="rc", help="comma list from {raw, rc}")
+    ap.add_argument("--rewards", default="rc", help="comma list from {raw, rc, ra_rc}")
     ap.add_argument("--seeds", default="0")
     ap.add_argument("--T", type=int, default=8, help="segment length (1 ctx + T-1 future)")
     ap.add_argument("--K", type=int, default=16)
@@ -297,7 +380,7 @@ def main():
         return
 
     rewards = [r.strip() for r in args.rewards.split(",") if r.strip()]
-    unknown = sorted(set(rewards) - {"raw", "rc"})
+    unknown = sorted(set(rewards) - {"raw", "rc", "ra_rc"})
     if unknown:
         raise ValueError(f"unknown rewards: {unknown}")
     seeds = [int(s) for s in args.seeds.split(",") if s.strip()]

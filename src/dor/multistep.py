@@ -150,6 +150,39 @@ def msp_rollout(model, ctx_off, act_off, n_future, K, seed,
     return torch.stack(outs, dim=1).clamp(0, V_MSP - 1)
 
 
+@torch.no_grad()
+def msp_continue(model, ctx_off, act_off, prefix_dyn, n_future, K, seed,
+                 temperature=1.0, top_k=100):
+    """Sample a continuation from a fixed dynamics-token prefix.
+
+    ``prefix_dyn`` is a single already selected trajectory prefix ``[P, 80]`` in
+    raw dynamics-token IDs.  The forced action after each prefix frame is appended
+    exactly as in :func:`msp_rollout`; only later dynamics tokens are sampled.  A
+    common ``seed`` across two prefixes implements common-random-number rollouts
+    for the C1 counterfactual decision gate.  It is an evaluation utility and is
+    deliberately not used by the training objective.
+    """
+    if prefix_dyn.ndim != 2 or prefix_dyn.shape[1] != DYN_PER_FRAME:
+        raise ValueError(f"prefix_dyn must be [P,{DYN_PER_FRAME}], got {tuple(prefix_dyn.shape)}")
+    p = prefix_dyn.shape[0]
+    if p + n_future > act_off.shape[0]:
+        raise ValueError("prefix plus continuation exceeds supplied action horizon")
+    torch.manual_seed(seed)
+    seq = ctx_off.expand(K, -1).contiguous()
+    for t in range(p):
+        fixed = prefix_dyn[t].unsqueeze(0).expand(K, -1)
+        seq = torch.cat([seq, fixed, act_off[t].unsqueeze(0).expand(K, -1)], dim=1)
+    outs = []
+    for t in range(p, p + n_future):
+        gen = model.generate(
+            input_ids=seq, do_sample=True, temperature=temperature, top_k=top_k,
+            num_return_sequences=1, max_new_tokens=DYN_PER_FRAME,
+            min_new_tokens=DYN_PER_FRAME, eos_token_id=None, pad_token_id=MSP_EOS)
+        outs.append(gen[:, seq.shape[1]:seq.shape[1] + DYN_PER_FRAME])
+        seq = torch.cat([gen, act_off[t].unsqueeze(0).expand(K, -1)], dim=1)
+    return torch.stack(outs, dim=1).clamp(0, V_MSP - 1)
+
+
 def msp_token_logp(model, ctx_off, act_off, dyn, autocast=True):
     """Per-candidate, per-frame, per-token log-prob of the sampled DYN tokens.
 

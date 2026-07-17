@@ -22,8 +22,9 @@ BOS = 4631
 EOS = 4632
 BLOCK = TPF + ADIM              # 333 per context frame
 PROMPT_LEN = CTX * BLOCK + 1    # 1333
-# motion dims in npz action order: rotation_delta = 6:9, world_vector = 10:13
-MOTION_DIMS = [6, 7, 8, 10, 11, 12]
+# RT-1 processor order used by the official action ranges and converted npz files:
+# world_vector=0:3, gripper=3, rotation_delta=4:7, terminate=7:10, base=10:13.
+MOTION_DIMS = [0, 1, 2, 4, 5, 6]
 
 # checkpoints / data
 TOK_DIR = f"{ROOT}/checkpoints/tokenizer/rt1-frame-tokenizer"

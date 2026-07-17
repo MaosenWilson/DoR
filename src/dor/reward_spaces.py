@@ -43,7 +43,9 @@ ARMS = ("pixel", "mse", "ssim", "floor", "floorpc", "multi", "phi", "code", "hyb
         "rcmg", "rcmg_pre", "rcmg_post", "rcmg_nocode", "rcmg_nograd",
         "rcmg_nodyn", "rcmg_nolpips", "rcmg_nomse", "rcmg_nossim",
         "rankcal_equal", "rankcal_post", "rankcal_full", "rankcal_nocode",
-        "rankcal_nograd", "mrrt", "mrrt_random")
+        "rankcal_nograd", "mrrt", "mrrt_random",
+        "raw_energy_point", "rc_energy_point", "raw_energy", "rc_energy",
+        "rc_energy_certified", "ra_rc")
 
 RCMG_PRE = ("code", "grad", "dyn")
 RCMG_POST = ("lpips", "mse", "ssim")
@@ -274,7 +276,7 @@ def rcmg_reward(kind, metrics, tok, cand, imgs, gt_idx, cur_idx, *,
 def gt_reward(kind, metrics, tok, cand, imgs, gt, gt_idx, *, alpha=0.5, phi_tok=0.0,
               weight_temp=1.0, cur_idx=None, dyn_lambda=0.25, dyn_gamma=0.25,
               dyn_tau=0.0, rcmg_pre_weight=0.5, rankcal_weights_path=None,
-              reachable_target_idx=None):
+              reachable_target_idx=None, energy_config_path=None):
     """Verifiable GT reward r_gt [K] (higher == closer to GT), never consensus-shaped.
 
     Args mirror `dor.grpo.gt_reward` plus:
@@ -290,6 +292,31 @@ def gt_reward(kind, metrics, tok, cand, imgs, gt, gt_idx, *, alpha=0.5, phi_tok=
         return rcmg_reward(
             kind, metrics, tok, cand, imgs, gt_idx, cur_idx,
             pre_weight=rcmg_pre_weight, dyn_gamma=dyn_gamma, dyn_tau=dyn_tau,
+        )
+    energy_arms = (
+        "raw_energy_point", "rc_energy_point", "raw_energy", "rc_energy",
+        "rc_energy_certified",
+    )
+    if kind in energy_arms:
+        from dor.energy_verifier import (
+            certified_energy_reward,
+            energy_candidate_reward,
+            load_energy_config,
+        )
+
+        config = load_energy_config(energy_config_path)
+        if kind == "rc_energy_certified":
+            reachable = decode_tokens(tok, gt_idx.reshape(1, -1))[0]
+            return certified_energy_reward(metrics.lpips, imgs, gt, reachable, config)
+        target = gt
+        if kind.startswith("rc_energy"):
+            target = decode_tokens(tok, gt_idx.reshape(1, -1))[0]
+        return energy_candidate_reward(
+            metrics.lpips,
+            imgs,
+            target,
+            config,
+            pairwise=not kind.endswith("_point"),
         )
     if kind in ("code", "code_dyn"):
         r_code = -code_rms(tok, cand, gt_idx)

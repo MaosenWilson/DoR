@@ -18,6 +18,10 @@ from dor.consensus import consensus_support, motion_magnitude
 from dor.constants import CTX, GRID, TPF
 from dor.episodes import get_window_tensors, list_episodes, sample_windows
 from dor.generation import generate_candidates
+from dor.gradient_constraints import (
+    accumulate_parameter_gradients,
+    project_to_primary_progress,
+)
 from dor.metrics import Metrics
 from dor.models import load_action_ranges, load_tokenizer, load_world_model
 
@@ -406,16 +410,31 @@ def gspo_loss(tok_logp, adv, old_tok_logp=None, *, clip_low=3e-4, clip_high=4e-4
 
 
 @torch.no_grad()
-def eval_model(model, tok, metrics, wins, device, K=8, seed=999, flow=True):
+def eval_model(
+    model,
+    tok,
+    metrics,
+    wins,
+    device,
+    K=8,
+    seed=999,
+    flow=True,
+    progress_label=None,
+):
     """Held-out metrics via RLVR-World's Evaluator (MAE/MSE/PSNR/SSIM/LPIPS-vgg, one-to-one
     comparable) + code-RMS/repeat (ours) + DYNAMICS (RAFT flow / frame-delta cosine).
     Per window the Evaluator returns the mean over the K candidates."""
     keys = ("mae", "mse", "psnr", "ssim", "lpips", "code_rms", "repeat", "dmotion", "flow")
     acc = {k: [] for k in keys}
+    total = len(wins)
+    started = time.time()
+    if progress_label:
+        print(f"[{progress_label}] starting {total} windows, K={K}", flush=True)
     ar = load_action_ranges(device)
     ev = _get_evaluator(device)
     raft = _get_raft(device) if flow else None
     for wi, (p, s) in enumerate(wins):
+        window_started = time.time()
         frames, actions = get_window_tensors(p, s, device)
         gt, cur = frames[CTX], frames[CTX - 1]
         prompt = build_prompt(tok, frames, actions, ar)
@@ -438,6 +457,16 @@ def eval_model(model, tok, metrics, wins, device, K=8, seed=999, flow=True):
                 acc["flow"].append(float(np.mean(flow_fidelity(raft, cur, preds, gt))))
             except Exception:
                 acc["flow"].append(float("nan"))
+        if progress_label:
+            done = wi + 1
+            elapsed = time.time() - started
+            eta = elapsed / done * (total - done)
+            print(
+                f"[{progress_label}] {_bar(done / max(total, 1))} {done}/{total} "
+                f"window_time={_hms(time.time() - window_started)} "
+                f"elapsed={_hms(elapsed)} eta={_hms(eta)}",
+                flush=True,
+            )
     return {k: (float(np.nanmean(v)) if v else float("nan")) for k, v in acc.items()}
 
 
@@ -445,7 +474,7 @@ def train(mode, *, reward="pixel", alpha=0.5, phi_tok=0.0, weight_temp=1.0,
           rank_weight=False, rank_sigma=-1.0, rank_sigma_scale=1.0,
           rank_min_weight=0.05,
           dyn_lambda=0.25, dyn_gamma=0.25, dyn_tau=0.0, rcmg_pre_weight=0.5,
-          rankcal_weights_path=None, reachable_target_cache=None,
+          rankcal_weights_path=None, reachable_target_cache=None, energy_config_path=None,
           floor_filter=False, tau=1.0, steps=40, K=8, batch_windows=2,
           train_windows=24, eval_windows=12, lr=1e-5, lam=0.5, beta=0.5, kl=0.0,
           eval_every=10, seed=0, ckpt_dir=None, device="cuda", deterministic=False,
@@ -463,6 +492,15 @@ def train(mode, *, reward="pixel", alpha=0.5, phi_tok=0.0, weight_temp=1.0,
     the original behaviour bit-for-bit.
     """
     from dor.reward_spaces import gt_reward as gt_reward_space  # local: avoid import cycle
+    if reward == "ra_rc" and (
+        mode != "gt_only"
+        or adv_estimator != "grpo"
+        or floor_filter
+        or rank_weight
+    ):
+        raise ValueError(
+            "ra_rc requires mode=gt_only, adv_estimator=grpo, and no filtering/rank weighting"
+        )
     mrrt_targets = None
     if reward in ("mrrt", "mrrt_random"):
         from dor.reachable_projection import load_mrrt_cache
@@ -483,6 +521,7 @@ def train(mode, *, reward="pixel", alpha=0.5, phi_tok=0.0, weight_temp=1.0,
     ar = load_action_ranges(device)
     metrics = Metrics(device)
     opt = torch.optim.AdamW(model.parameters(), lr=lr)
+    parameters = tuple(parameter for parameter in model.parameters() if parameter.requires_grad)
 
     allw = sample_windows(list_episodes(), train_windows + eval_windows, seed=1)
     train_w, eval_w = allw[:train_windows], allw[train_windows:]
@@ -494,8 +533,16 @@ def train(mode, *, reward="pixel", alpha=0.5, phi_tok=0.0, weight_temp=1.0,
 
     log = {"step": [], "reward_mean": [], "adv_abs_mean": [], "frac_pos": [],
            "rank_w_mean": [],
+           "train_step_seconds": [],
            "eval_mae": [], "eval_mse": [], "eval_psnr": [], "eval_ssim": [], "eval_lpips": [],
            "eval_code_rms": [], "eval_repeat": [], "eval_flow": [], "eval_dmotion": []}
+    if reward == "ra_rc":
+        for name in (
+            "train_constraint_active", "train_projection_coefficient",
+            "train_gradient_cosine", "train_preferred_progress_ratio",
+            "train_projected_progress_ratio",
+        ):
+            log[name] = []
 
     def _rank_sigma_for_reward():
         if rank_sigma and rank_sigma > 0:
@@ -514,7 +561,15 @@ def train(mode, *, reward="pixel", alpha=0.5, phi_tok=0.0, weight_temp=1.0,
         return float(sig) * float(rank_sigma_scale)
 
     def _log_eval(step, r_mean=0.0, adv_abs=0.0, frac_pos=0.0, rank_w=1.0):
-        e = eval_model(model, tok, metrics, eval_w, device, K=K)
+        e = eval_model(
+            model,
+            tok,
+            metrics,
+            eval_w,
+            device,
+            K=K,
+            progress_label=f"{reward}/{mode} eval@{step}",
+        )
         log["step"].append(step)
         log["reward_mean"].append(r_mean)
         log["adv_abs_mean"].append(adv_abs)
@@ -530,10 +585,12 @@ def train(mode, *, reward="pixel", alpha=0.5, phi_tok=0.0, weight_temp=1.0,
     rng = np.random.default_rng(seed)
     t0 = time.time()
     for step in range(1, steps + 1):
+        step_t0 = time.time()
         idx = rng.integers(0, len(train_w), size=batch_windows)
         opt.zero_grad()
         rwd_acc, adv_acc, pos_acc, rankw_acc, nseq = 0.0, 0.0, 0.0, 0.0, 0
         gspo_cache = []
+        projection_rows = []
         for bi in idx:
             p, s = train_w[bi]
             frames, actions = get_window_tensors(p, s, device)
@@ -613,16 +670,30 @@ def train(mode, *, reward="pixel", alpha=0.5, phi_tok=0.0, weight_temp=1.0,
                         cstd = float(np.std(code_rms(tok, cand, gt_idx)))
                         if cstd / s_code <= tau * sigma_eta_norm:
                             continue
-                    r_gt = gt_reward_space(reward, metrics, tok, cand, imgs, gt, gt_idx,
-                                           alpha=alpha, phi_tok=phi_tok, weight_temp=weight_temp,
-                                           cur_idx=cur_idx, dyn_lambda=dyn_lambda,
-                                           dyn_gamma=dyn_gamma, dyn_tau=dyn_tau,
-                                           rcmg_pre_weight=rcmg_pre_weight,
-                                           rankcal_weights_path=rankcal_weights_path,
-                                           reachable_target_idx=reachable_target_idx)
-                    if mode in ("gt_only", "drgrpo", "rankrel"):
-                        adv, _ = shape_advantage(r_gt, mode=mode)
+                    if reward == "ra_rc":
+                        raw_reward = gt_reward_space(
+                            "a0faithful", metrics, tok, cand, imgs, gt, gt_idx,
+                            cur_idx=cur_idx,
+                        )
+                        rc_reward = gt_reward_space(
+                            "a0faithful_tok", metrics, tok, cand, imgs, gt, gt_idx,
+                            cur_idx=cur_idx,
+                        )
+                        raw_adv, _ = shape_advantage(raw_reward, mode="gt_only")
+                        rc_adv, _ = shape_advantage(rc_reward, mode="gt_only")
+                        r_gt, adv = rc_reward, rc_adv
                     else:
+                        r_gt = gt_reward_space(reward, metrics, tok, cand, imgs, gt, gt_idx,
+                                               alpha=alpha, phi_tok=phi_tok, weight_temp=weight_temp,
+                                               cur_idx=cur_idx, dyn_lambda=dyn_lambda,
+                                               dyn_gamma=dyn_gamma, dyn_tau=dyn_tau,
+                                               rcmg_pre_weight=rcmg_pre_weight,
+                                               rankcal_weights_path=rankcal_weights_path,
+                                               reachable_target_idx=reachable_target_idx,
+                                               energy_config_path=energy_config_path)
+                    if reward != "ra_rc" and mode in ("gt_only", "drgrpo", "rankrel"):
+                        adv, _ = shape_advantage(r_gt, mode=mode)
+                    elif reward != "ra_rc":
                         copy_sim = metrics.eval_batch(imgs, cur)["lpips"]
                         delta = encode_features(tok, imgs) - encode_features(tok, cur.unsqueeze(0))
                         v, _, _ = consensus_support(delta)
@@ -659,7 +730,36 @@ def train(mode, *, reward="pixel", alpha=0.5, phi_tok=0.0, weight_temp=1.0,
                         resid = a_seg - a_seg.mean(dim=1, keepdim=True)   # zero-mean per candidate
                         resid_tok_t = resid[:, seg_ids]                   # [K, TPF]
             logp_sum, tok_logp = seq_logp(model, prompt, cand)
-            if adv_estimator == "seg_grpo":
+            if reward == "ra_rc":
+                raw_adv_t = torch.as_tensor(raw_adv, device=device, dtype=torch.float32)
+                rc_adv_t = torch.as_tensor(rc_adv, device=device, dtype=torch.float32)
+                raw_pg = -(raw_adv_t * logp_sum).mean()
+                rc_pg = -(rc_adv_t * logp_sum).mean()
+                kl_loss = None
+                if ref is not None:
+                    with torch.no_grad():
+                        _, ref_tok = seq_logp(ref, prompt, cand)
+                    kl_loss = kl * (tok_logp - ref_tok).mean()
+                raw_gradients = torch.autograd.grad(
+                    raw_pg, parameters, retain_graph=True, allow_unused=True
+                )
+                rc_gradients = torch.autograd.grad(
+                    rc_pg,
+                    parameters,
+                    retain_graph=kl_loss is not None,
+                    allow_unused=True,
+                )
+                projected, projection = project_to_primary_progress(
+                    raw_gradients, rc_gradients
+                )
+                accumulate_parameter_gradients(
+                    parameters, projected, scale=1.0 / len(idx)
+                )
+                if kl_loss is not None:
+                    (kl_loss / len(idx)).backward()
+                projection_rows.append(projection)
+                pg = rc_pg
+            elif adv_estimator == "seg_grpo":
                 pg = -(adv_tok_t * tok_logp).sum(1).mean()
             elif adv_estimator == "gpseg":
                 # decomposed loss: L_global (expression-identical to the standard path)
@@ -682,11 +782,12 @@ def train(mode, *, reward="pixel", alpha=0.5, phi_tok=0.0, weight_temp=1.0,
                 gspo_cache.append((prompt, cand, adv, tok_logp.detach()))
             else:
                 pg = -(adv_t * logp_sum).mean()
-            if ref is not None:
+            if reward != "ra_rc" and ref is not None:
                 with torch.no_grad():
                     _, ref_tok = seq_logp(ref, prompt, cand)
                 pg = pg + kl * (tok_logp - ref_tok).mean()
-            (pg / len(idx)).backward()
+            if reward != "ra_rc":
+                (pg / len(idx)).backward()
             if adv_estimator == "seg_grpo":
                 rwd_acc += r_seg_mean
                 adv_acc += float(np.abs(seg_adv_np).mean())
@@ -711,6 +812,17 @@ def train(mode, *, reward="pixel", alpha=0.5, phi_tok=0.0, weight_temp=1.0,
         if nseq > 0:  # all groups may be filtered out under floor_filter
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             opt.step()
+        if reward == "ra_rc" and projection_rows:
+            log["train_constraint_active"].append(float(np.mean([
+                row["constraint_active"] for row in projection_rows
+            ])))
+            for key, log_name in (
+                ("coefficient", "train_projection_coefficient"),
+                ("gradient_cosine", "train_gradient_cosine"),
+                ("preferred_progress_ratio", "train_preferred_progress_ratio"),
+                ("projected_progress_ratio", "train_projected_progress_ratio"),
+            ):
+                log[log_name].append(float(np.mean([row[key] for row in projection_rows])))
         if adv_estimator == "gspo" and ppo_epochs > 1 and gspo_cache:
             # GSPO's actual content: off-policy re-updates on the SAME rollouts against
             # the cached rollout-time logp. From epoch 2 the weights have moved, so the
@@ -730,6 +842,23 @@ def train(mode, *, reward="pixel", alpha=0.5, phi_tok=0.0, weight_temp=1.0,
             if step % eval_every == 0 or step == steps:
                 print(f"[gspo] step {step} offpolicy ep ratio_mean={gspo_ep_stats[0]:.6f} "
                       f"clipfrac={gspo_ep_stats[1]:.3f}", flush=True)
+        elapsed = time.time() - t0
+        step_elapsed = time.time() - step_t0
+        log["train_step_seconds"].append(float(step_elapsed))
+        eta = elapsed / step * (steps - step)
+        progress_suffix = f"r={rwd_acc / max(nseq, 1):.5f}"
+        if reward == "ra_rc" and projection_rows:
+            progress_suffix = (
+                f"active={np.mean([row['constraint_active'] for row in projection_rows]):.2f} "
+                f"cos={np.mean([row['gradient_cosine'] for row in projection_rows]):+.3f} "
+                f"rawProg={np.mean([row['projected_progress_ratio'] for row in projection_rows]):.3f}"
+            )
+        print(
+            f"[{reward}/{mode}] {_bar(step / steps)} {step}/{steps} "
+            f"step_time={_hms(step_elapsed)} elapsed={_hms(elapsed)} eta={_hms(eta)} "
+            f"{progress_suffix}",
+            flush=True,
+        )
         if step % eval_every == 0 or step == steps:
             n = max(nseq, 1)
             _log_eval(step, rwd_acc / n, adv_acc / n, pos_acc / n, rankw_acc / n)

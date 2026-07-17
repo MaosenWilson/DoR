@@ -56,6 +56,8 @@ def main():
                     help="Frozen JSON from calibrate_rank_reward.py for rankcal_* rewards")
     ap.add_argument("--reachable_target_cache", default="",
                     help="NPZ from cache_mrrt_targets.py, required by mrrt/mrrt_random")
+    ap.add_argument("--energy_config", default="",
+                    help="Frozen JSON from cache_rc_energy.py, required by *_energy rewards")
     ap.add_argument("--floor_filter", action="store_true",
                     help="Floor-aware GRPO: skip groups with std_k(code)/s_code <= tau*sigma_eta_norm")
     ap.add_argument("--tau", type=float, default=1.0, help="floor-filter threshold multiple")
@@ -111,6 +113,11 @@ def main():
     ap.add_argument("--deterministic", action="store_true",
                     help="bitwise-reproducible per seed (det. cuBLAS/cuDNN/SDPA); slower, for final runs")
     ap.add_argument("--eval_every", type=int, default=10)
+    ap.add_argument(
+        "--no_save_checkpoints",
+        action="store_true",
+        help="keep metric JSONs but skip final model checkpoints (sweep storage control)",
+    )
     ap.add_argument("--out", default=f"{ROOT}/outputs/grpo/curves.json", help="legacy single-run output")
     ap.add_argument("--out_dir", default=f"{ROOT}/outputs/grpo", help="sweep-mode per-run output dir")
     args = ap.parse_args()
@@ -128,7 +135,11 @@ def main():
         raise SystemExit(f"unknown modes {bad_m}; valid: {MODES}")
 
     def _train(reward, mode, seed):
-        ckpt = os.path.join(args.out_dir, "ckpt", f"{reward}_{mode}_s{seed}")
+        ckpt = (
+            None
+            if args.no_save_checkpoints
+            else os.path.join(args.out_dir, "ckpt", f"{reward}_{mode}_s{seed}")
+        )
         return train(mode, reward=reward, alpha=args.alpha, phi_tok=args.phi_tok,
                      weight_temp=args.weight_temp, rank_weight=args.rank_weight,
                      rank_sigma=args.rank_sigma, rank_sigma_scale=args.rank_sigma_scale,
@@ -137,6 +148,7 @@ def main():
                      rcmg_pre_weight=args.rcmg_pre_weight,
                      rankcal_weights_path=args.rankcal_weights or None,
                      reachable_target_cache=args.reachable_target_cache or None,
+                     energy_config_path=args.energy_config or None,
                      floor_filter=args.floor_filter, tau=args.tau,
                      steps=args.steps, K=args.K, batch_windows=args.batch_windows,
                      train_windows=args.train_windows, eval_windows=args.eval_windows,
