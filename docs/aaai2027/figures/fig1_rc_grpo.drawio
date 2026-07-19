@@ -1,0 +1,244 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mxfile host="app.diagrams.net" agent="rc-grpo-fig1" version="22.1.0">
+  <diagram id="fig1" name="Figure1-RC-GRPO">
+    <mxGraphModel dx="1400" dy="900" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1600" pageHeight="1000" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+
+        <!-- LEFT: Existing GRPO -->
+        <mxCell id="L_box" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;strokeWidth=1.5;arcSize=4;" vertex="1" parent="1">
+          <mxGeometry x="40" y="40" width="720" height="720" as="geometry" />
+        </mxCell>
+        <mxCell id="L_title" value="Existing GRPO post-training" style="text;html=1;strokeColor=none;fillColor=#e0e0e0;align=center;verticalAlign=middle;fontStyle=1;fontSize=15;fontColor=#333333;rounded=1;" vertex="1" parent="1">
+          <mxGeometry x="40" y="40" width="720" height="36" as="geometry" />
+        </mxCell>
+
+        <mxCell id="L_ctx" value="Context&#xa;o_{1:C}, a" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="70" y="100" width="100" height="56" as="geometry" />
+        </mxCell>
+        <mxCell id="L_wm" value="World model&#xa;(frozen tok./dec.)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="200" y="100" width="130" height="56" as="geometry" />
+        </mxCell>
+        <mxCell id="L_cand" value="Candidate group&#xa;ŝ₁ … ŝ_G&#xa;(in reachable set)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="360" y="90" width="140" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="L_gt" value="Raw target s'&#xa;(often outside&#xa;codec set)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="540" y="90" width="130" height="70" as="geometry" />
+        </mxCell>
+
+        <mxCell id="e_L1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;strokeColor=#6c8ebf;" edge="1" parent="1" source="L_ctx" target="L_wm">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_L2" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;strokeColor=#6c8ebf;" edge="1" parent="1" source="L_wm" target="L_cand">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <mxCell id="L_score" value="Score vs raw s'&#xa;R_i = −d(ŝ_i, s')&#xa;(MSE+LPIPS)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="200" y="210" width="160" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="L_grpo" value="GRPO&#xa;group-normalize R&#xa;→ one sequence A" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=11;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="400" y="210" width="160" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="L_bcast" value="Broadcast same A&#xa;to all future-frame&#xa;token blocks t=1…T" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="600" y="210" width="140" height="70" as="geometry" />
+        </mxCell>
+
+        <mxCell id="e_L3" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;strokeColor=#b85450;dashed=1;" edge="1" parent="1" source="L_cand" target="L_score">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_L4" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;strokeColor=#b85450;dashed=1;" edge="1" parent="1" source="L_gt" target="L_score">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_L5" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;strokeColor=#b85450;" edge="1" parent="1" source="L_score" target="L_grpo">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_L6" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;strokeColor=#b85450;" edge="1" parent="1" source="L_grpo" target="L_bcast">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <mxCell id="P1" value="&lt;b&gt;Problem 1: Target-set mismatch&lt;/b&gt;&lt;br&gt;s' ∉ reachable set S_codec&lt;br&gt;Ranking vs s' ≠ ranking vs D(Q(E(s')))&lt;br&gt;→ &lt;font color=&quot;#b85450&quot;&gt;biased group rewards for GRPO&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;align=left;spacingLeft=10;fillColor=#f8cecc;strokeColor=#b85450;fontSize=11;verticalAlign=top;spacingTop=6;" vertex="1" parent="1">
+          <mxGeometry x="70" y="320" width="320" height="110" as="geometry" />
+        </mxCell>
+        <mxCell id="P1_ico" value="raw s'&#xa;≠&#xa;S_codec" style="rhombus;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#b85450;fontSize=10;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="280" y="340" width="90" height="70" as="geometry" />
+        </mxCell>
+
+        <mxCell id="P2" value="&lt;b&gt;Problem 2: Uniform credit&lt;/b&gt;&lt;br&gt;Same sequence-level A for all t&lt;br&gt;Ignores autoregressive causality&lt;br&gt;→ &lt;font color=&quot;#b85450&quot;&gt;misaligned advantages in GRPO&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;align=left;spacingLeft=10;fillColor=#f8cecc;strokeColor=#b85450;fontSize=11;verticalAlign=top;spacingTop=6;" vertex="1" parent="1">
+          <mxGeometry x="410" y="320" width="320" height="110" as="geometry" />
+        </mxCell>
+        <mxCell id="P2_t1" value="t=1&#xa;A" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="520" y="380" width="44" height="36" as="geometry" />
+        </mxCell>
+        <mxCell id="P2_t2" value="t=2&#xa;A" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="575" y="380" width="44" height="36" as="geometry" />
+        </mxCell>
+        <mxCell id="P2_tT" value="t=T&#xa;A" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="655" y="380" width="44" height="36" as="geometry" />
+        </mxCell>
+        <mxCell id="P2_note" value="same A" style="text;html=1;strokeColor=none;fillColor=none;fontColor=#b85450;fontSize=10;fontStyle=2;" vertex="1" parent="1">
+          <mxGeometry x="575" y="420" width="60" height="20" as="geometry" />
+        </mxCell>
+
+        <mxCell id="L_sum" value="✗ Broken GRPO signals: unreliable R (ranking) + misaligned A (credit)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=12;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="70" y="460" width="660" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="L_note" value="Shared skeleton: sample group → score → GRPO update. Failure is in the reward target and advantage scope—not in replacing GRPO." style="text;html=1;strokeColor=none;fillColor=none;align=left;fontSize=10;fontColor=#666666;fontStyle=2;" vertex="1" parent="1">
+          <mxGeometry x="70" y="510" width="660" height="30" as="geometry" />
+        </mxCell>
+
+        <!-- RIGHT: RC-GRPO -->
+        <mxCell id="R_box" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5fff5;strokeColor=#82b366;strokeWidth=1.5;arcSize=4;" vertex="1" parent="1">
+          <mxGeometry x="800" y="40" width="760" height="720" as="geometry" />
+        </mxCell>
+        <mxCell id="R_title" value="RC-GRPO (Ours): fix GRPO interfaces" style="text;html=1;strokeColor=none;fillColor=#d5e8d4;align=center;verticalAlign=middle;fontStyle=1;fontSize=15;fontColor=#2d5016;rounded=1;" vertex="1" parent="1">
+          <mxGeometry x="800" y="40" width="760" height="36" as="geometry" />
+        </mxCell>
+
+        <mxCell id="R_ctx" value="Context&#xa;o_{1:C}, a" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="830" y="100" width="100" height="56" as="geometry" />
+        </mxCell>
+        <mxCell id="R_wm" value="World model&#xa;(frozen tok./dec.)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="960" y="100" width="130" height="56" as="geometry" />
+        </mxCell>
+        <mxCell id="R_cand" value="Candidate group&#xa;ŝ₁ … ŝ_G&#xa;(same as left)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="1120" y="90" width="140" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="R_shared" value="Shared GRPO form&#xa;group-relative R → A" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=10;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="1300" y="100" width="130" height="56" as="geometry" />
+        </mxCell>
+
+        <mxCell id="e_R1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;strokeColor=#6c8ebf;" edge="1" parent="1" source="R_ctx" target="R_wm">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_R2" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;strokeColor=#6c8ebf;" edge="1" parent="1" source="R_wm" target="R_cand">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- Module 1 -->
+        <mxCell id="M1" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;strokeWidth=1.5;arcSize=6;" vertex="1" parent="1">
+          <mxGeometry x="830" y="190" width="340" height="200" as="geometry" />
+        </mxCell>
+        <mxCell id="M1t" value="1) Reachability calibration → fix R" style="text;html=1;strokeColor=none;fillColor=none;align=left;fontStyle=1;fontSize=12;fontColor=#2d5016;" vertex="1" parent="1">
+          <mxGeometry x="840" y="195" width="300" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="M1a" value="Raw s'" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="850" y="230" width="70" height="36" as="geometry" />
+        </mxCell>
+        <mxCell id="M1b" value="D(Q(E(s')))&#xa;reachable s̃'" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=10;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="950" y="225" width="100" height="44" as="geometry" />
+        </mxCell>
+        <mxCell id="M1c" value="Audit: Δρ ↑&#xa;flips ↓" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#82b366;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="1070" y="225" width="80" height="44" as="geometry" />
+        </mxCell>
+        <mxCell id="M1d" value="Train ranking: R^RC vs s̃'&#xa;(MSE + LPIPS kept)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=11;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="850" y="290" width="200" height="44" as="geometry" />
+        </mxCell>
+        <mxCell id="M1e" value="Eval still&#xa;vs raw s'" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=10;fontStyle=2;" vertex="1" parent="1">
+          <mxGeometry x="1060" y="295" width="90" height="36" as="geometry" />
+        </mxCell>
+        <mxCell id="M1f" value="GRPO consumes more reliable group-relative rewards" style="text;html=1;strokeColor=none;fillColor=none;align=left;fontSize=10;fontColor=#2d5016;fontStyle=2;" vertex="1" parent="1">
+          <mxGeometry x="850" y="350" width="300" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="e_M1a" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;strokeColor=#82b366;" edge="1" parent="1" source="M1a" target="M1b">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- Module 2 -->
+        <mxCell id="M2" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e8f5e9;strokeColor=#66bb6a;strokeWidth=1.5;dashed=1;dashPattern=8 4;arcSize=6;" vertex="1" parent="1">
+          <mxGeometry x="1190" y="190" width="340" height="200" as="geometry" />
+        </mxCell>
+        <mxCell id="M2t" value="2) Original-target constraint → keep direction" style="text;html=1;strokeColor=none;fillColor=none;align=left;fontStyle=1;fontSize=12;fontColor=#2d5016;" vertex="1" parent="1">
+          <mxGeometry x="1200" y="195" width="320" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="M2a" value="g_RC" style="ellipse;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=11;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="1220" y="250" width="70" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="M2b" value="Half-space proj.&#xa;⟨g, g_raw⟩ ≥ 0" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#66bb6a;fontSize=10;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="1320" y="245" width="110" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="M2c" value="g_final" style="ellipse;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=11;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="1460" y="250" width="50" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="M2d" value="Raw verifier anchors fidelity;&#xa;RC corrects ranking without&#xa;sacrificing first-order raw progress" style="text;html=1;strokeColor=none;fillColor=none;align=left;fontSize=10;fontColor=#333333;" vertex="1" parent="1">
+          <mxGeometry x="1220" y="320" width="280" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="e_M2a" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;strokeColor=#66bb6a;" edge="1" parent="1" source="M2a" target="M2b">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_M2b" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;strokeColor=#66bb6a;" edge="1" parent="1" source="M2b" target="M2c">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- Module 3 -->
+        <mxCell id="M3" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f3e5f5;strokeColor=#9673a6;strokeWidth=1.5;dashed=1;dashPattern=8 4;arcSize=6;" vertex="1" parent="1">
+          <mxGeometry x="830" y="410" width="700" height="200" as="geometry" />
+        </mxCell>
+        <mxCell id="M3t" value="3) Visual token-block credit → fix A" style="text;html=1;strokeColor=none;fillColor=none;align=left;fontStyle=1;fontSize=12;fontColor=#5e3568;" vertex="1" parent="1">
+          <mxGeometry x="840" y="415" width="400" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="M3_blk1" value="frame&#xa;block t=1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="860" y="460" width="70" height="44" as="geometry" />
+        </mxCell>
+        <mxCell id="M3_blk2" value="frame&#xa;block t=2" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="980" y="460" width="70" height="44" as="geometry" />
+        </mxCell>
+        <mxCell id="M3_blkT" value="frame&#xa;block t=T" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="1100" y="460" width="70" height="44" as="geometry" />
+        </mxCell>
+        <mxCell id="M3_A1" value="A₁" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#9673a6;fontSize=12;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="870" y="530" width="50" height="32" as="geometry" />
+        </mxCell>
+        <mxCell id="M3_A2" value="A₂" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#9673a6;fontSize=12;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="990" y="530" width="50" height="32" as="geometry" />
+        </mxCell>
+        <mxCell id="M3_AT" value="A_T" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#9673a6;fontSize=12;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="1110" y="530" width="50" height="32" as="geometry" />
+        </mxCell>
+        <mxCell id="M3_eq" value="G_t = Σ_{h≥t} γ^{h−t} r_h&#xa;A_t = group-normalize G_t at time t only&#xa;Different A_t → causal credit for autoregressive video" style="rounded=1;whiteSpace=wrap;html=1;align=left;spacingLeft=8;fillColor=#ffffff;strokeColor=#9673a6;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="1220" y="450" width="290" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="e_M3a" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;strokeColor=#9673a6;" edge="1" parent="1" source="M3_blk1" target="M3_A1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_M3b" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;strokeColor=#9673a6;" edge="1" parent="1" source="M3_blk2" target="M3_A2">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_M3c" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;strokeColor=#9673a6;" edge="1" parent="1" source="M3_blkT" target="M3_AT">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <mxCell id="R_sum" value="✓ GRPO with calibrated R + constrained update + horizon-aligned A" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=12;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="830" y="630" width="700" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="R_note" value="Does not retrain tokenizer/decoder; does not replace GRPO—repairs its reward target and temporal advantage scope." style="text;html=1;strokeColor=none;fillColor=none;align=left;fontSize=10;fontColor=#666666;fontStyle=2;" vertex="1" parent="1">
+          <mxGeometry x="830" y="680" width="700" height="30" as="geometry" />
+        </mxCell>
+
+        <!-- Bottom bar -->
+        <mxCell id="BOT" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff8e1;strokeColor=#d6b656;strokeWidth=1.5;" vertex="1" parent="1">
+          <mxGeometry x="40" y="790" width="1520" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="BOT_L" value="✗ Existing GRPO&#xa;R vs unreachable raw s'&#xa;Uniform sequence A" style="text;html=1;strokeColor=none;fillColor=none;align=center;fontSize=11;fontColor=#b85450;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="60" y="805" width="200" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="BOT_M" value="RC-GRPO = Calibrated targets  +  Direction consistency  +  Temporal credit alignment" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=13;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="300" y="815" width="720" height="44" as="geometry" />
+        </mxCell>
+        <mxCell id="BOT_R" value="✓ Better post-training signals&#xa;· Reliable candidate comparison&#xa;· Horizon-aligned credit (e.g. RT-1)" style="text;html=1;strokeColor=none;fillColor=none;align=left;fontSize=11;fontColor=#2d5016;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="1060" y="805" width="460" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="e_BOT" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;strokeColor=#82b366;strokeWidth=2;" edge="1" parent="1" source="BOT_L" target="BOT_M">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_BOT2" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;strokeColor=#82b366;strokeWidth=2;" edge="1" parent="1" source="BOT_M" target="BOT_R">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <mxCell id="CAP" value="Figure 1. RC-GRPO vs. existing GRPO post-training. Left: scoring candidates against raw frames (target-set mismatch) and broadcasting one sequence-level advantage mis-specify GRPO's rewards R and advantages A. Right: (1) rank w.r.t. reachable reconstructions s̃'=D(Q(E(s'))); (2) project updates to preserve raw first-order progress; (3) assign per-frame-block advantages from return-to-go. Final metrics remain vs. raw s'. Backbone, tokenizer, and decoder stay frozen." style="text;html=1;strokeColor=none;fillColor=none;align=left;fontSize=11;fontColor=#333333;spacingTop=4;" vertex="1" parent="1">
+          <mxGeometry x="40" y="900" width="1520" height="70" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

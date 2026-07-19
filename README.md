@@ -26,11 +26,12 @@ engineering alone as a headline contribution.
 |---|---|---|
 | Encoder reconstruction | rejected as a metric projection | A 64-window legal-FSQ audit found a better reachable target in every window. |
 | MRRT | rejected at the training endpoint | It improves the fixed-budget target metric, but does not beat encoder RC or its matched-random control in the paired three-seed downstream pilot. |
-| Temporal Return | provisional | Earlier multi-step gains must be reproduced with RLVR-World/VERL's `low_var_kl` estimator. |
+| Temporal Return | provisional | Prefer multi-step results under RLVR-World/VERL `low_var_kl`; older linear-KL runs may be reported with an explicit protocol tag. |
 | Rank-Guard, GSPO, REAL-style VPO, spatial pooling | rejected or non-beneficial | Excluded from the active method. |
 
 The canonical claim-evidence ledger is [docs/aaai2027/story.md](docs/aaai2027/story.md).
-Do not cite preliminary README numbers as paper results.
+README numbers are orientation only; paper tables should cite `experiments.md` and run JSON
+artifacts. Reporting defaults and allowed flexibility are in [docs/aaai2027/README.md](docs/aaai2027/README.md).
 
 ## Layout
 
@@ -67,18 +68,16 @@ paths. Large assets, caches, and run outputs are intentionally not tracked.
 
 The sole runbook is [docs/aaai2027/RUN.md](docs/aaai2027/RUN.md):
 
-1. audit and cache the Metric-Refined Reachable Target (MRRT);
-2. compare raw GT, encoder reconstruction, MRRT, and matched-random legal targets under
-   identical single-step GRPO;
-3. reproduce the multi-step `raw/RC x sequence/temporal-return` factorial with
-   `low_var_kl`;
-4. only after that factorial passes, run temporal-correspondence controls.
+1. audit and cache reachable targets when needed for C1 diagnostics;
+2. compare raw / RC (and historical variants only if still informative) under shared GRPO settings;
+3. multi-step `raw/RC × sequence/temporal-return` factorial (prefer `low_var_kl`);
+4. temporal-correspondence and horizon controls as compute allows.
 
-Commands run in the foreground and write JSON artifacts containing their protocol and
-held-out metrics. Analysis scripts reject missing seeds and protocol mismatches.
+Commands write JSON artifacts with protocol and metrics. Analysis scripts should flag missing
+seeds or protocol mismatches; paper tables may still use a disclosed subset when documented.
 
 ## Paper workflow
 
 The LaTeX source is [docs/AuthorKit27/AnonymousSubmission2027.tex](docs/AuthorKit27/AnonymousSubmission2027.tex).
-Before changing the manuscript, update `story.md`, then `experiments.md`; update Method
-and LaTeX only after the relevant evidence passes its predeclared gate.
+Update `story.md` and `experiments.md` when claims or numbers change; sync Method/LaTeX when
+the presentation set is frozen. Prefer evidence-backed claims over hard gate language.

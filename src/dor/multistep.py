@@ -83,7 +83,15 @@ def load_msp(dev, which="base"):
     from transformers import AutoModelForCausalLM
     tok = CompressiveVQModelFSQ.from_pretrained(MSP_TOK_DIR).to(dev).eval()
     path = {"base": MSP_BASE_DIR, "rlvr": MSP_RLVR_DIR}[which]
-    model = AutoModelForCausalLM.from_pretrained(path, torch_dtype=torch.float32).to(dev)
+    # SDPA attention avoids materializing the full [B,1,L,L] causal mask that eager
+    # attention builds, which OOMs at K=16 on newer transformers; fall back to the
+    # default if the installed stack rejects the argument.
+    try:
+        model = AutoModelForCausalLM.from_pretrained(
+            path, torch_dtype=torch.float32, attn_implementation="sdpa"
+        ).to(dev)
+    except (TypeError, ValueError):
+        model = AutoModelForCausalLM.from_pretrained(path, torch_dtype=torch.float32).to(dev)
     return tok, model
 
 

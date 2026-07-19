@@ -7,6 +7,7 @@ from dor.adapters.ivideogpt_vp2 import (
     FUTURE_BLOCK_TOKENS,
     future_dynamics_tokens,
     future_dynamics_latent_reward,
+    prefix_tokens_through_frame,
     prompt_from_tokens,
 )
 
@@ -63,3 +64,15 @@ def test_latent_reward_uses_codebook_geometry_not_token_hamming():
 
     assert reward.shape == (2, 1)
     assert reward[0, 0] > reward[1, 0]
+
+
+def test_prefix_tokens_end_at_next_frame_separator():
+    horizon = 4
+    start = CONTEXT_LENGTH * CONTEXT_BLOCK_TOKENS - 1
+    full_length = start + horizon * FUTURE_BLOCK_TOKENS
+    tokens = torch.arange(full_length).reshape(1, -1)
+
+    prefix = prefix_tokens_through_frame(tokens, prefix_frames=2)
+
+    assert prefix.shape[1] == start + 2 * FUTURE_BLOCK_TOKENS + 1
+    assert prefix[0, -1].item() == tokens[0, prefix.shape[1] - 1].item()

@@ -130,7 +130,7 @@
 \maketitle
 
 \begin{abstract}
-Verifiable reward post-training improves tokenized video world models by scoring groups of decoded candidate futures against ground-truth frames and reinforcing higher-reward candidates with GRPO. We identify two structural mismatches in this loop. First, the raw target is not exactly reachable through a lossy tokenizer--decoder pair, and its reconstruction residual can change the within-group ordering consumed by GRPO. Second, a sequence-level advantage assigns identical credit to all autoregressive future-frame token blocks. We propose RC-GRPO, which compares decoded candidates with the tokenizer-reachable target $D(E(s))$ and assigns group-normalized temporal-return advantages to individual future-frame blocks, while leaving the tokenizer, decoder, and group-relative update unchanged. Pairwise reward disagreements follow the closed-form prediction $\arccos(\rho)/\pi$, and rescoring identical candidate groups with the reachable target reduces the measured disagreement. Under a fixed held-out multi-step RT-1 protocol, reconstruction calibration lowers final LPIPS and MSE relative to the raw verifier in five of five paired seeds. Temporal-return credit obtains lower mean full-rollout and last-frame LPIPS than sequence-level calibrated GRPO in four of five seeds, with increasingly favorable deltas at later horizons. The full method gives the best mean LPIPS, last-frame LPIPS, and MSE among our trained variants and evaluates below the public RLVR-World checkpoint on all five seeds under the same held-out evaluation protocol.
+Action-conditioned video world models provide learned dynamics for robotic planning, interactive simulation, and model-based decision making. Recent verifiable-reward post-training samples candidate futures, decodes them, and applies GRPO using full-reference errors to ground-truth frames. Yet a computable verifier need not be a reliable learning signal. Frozen visual tokenizers confine candidates to a codec-reachable set, whereas raw targets are generally not exactly reproducible; candidate-dependent interactions with the target reconstruction residual can change the within-group ordering consumed by GRPO. Multi-step training further broadcasts one sequence-level advantage across future-frame visual-token blocks with different downstream influence. We introduce RC-GRPO, which audits raw-versus-reachable rank disagreement, scores candidates against tokenizer reconstructions, anchors calibrated updates to first-order progress under the raw verifier, and assigns each future-frame token block the return of subsequent frames it can affect. Reconstruction audits show non-negligible encode--decode reconstruction errors for three independently designed FSQ codec instances, including NVIDIA Cosmos DV-FSQ, while same-candidate audits on RT-1 and VP2-RoboSuite show improved agreement with decoder-input representation error and fewer pairwise rank flips across tokenizers and generative architectures. On RT-1 episodes excluded from training, temporal return improves the mean of all five fidelity metrics over sequence-level calibration: MSE improves in all five paired seeds and the remaining metrics in four of five, although paired $t$ tests remain below conventional significance. The evidence supports calibrating both comparison support and temporal credit, but does not establish universal raw-pixel gains across platforms or improvements in motion and distributional realism.
 \end{abstract}
 
 % Uncomment the following to link to your code, datasets, an extended version or similar.
@@ -144,17 +144,13 @@ Verifiable reward post-training improves tokenized video world models by scoring
 
 \section{Introduction}
 
-Video world models predict future visual observations conditioned on past frames and actions, providing sampleable environment models for robotics, interactive simulation, and model-based reinforcement learning \citep{worldmodels,rssm,dreamerv3,dws}. A common implementation tokenizes visual observations and casts action-conditioned video prediction as sequence modeling: frames are encoded into discrete visual tokens, an autoregressive model predicts future tokens, and a decoder maps generated tokens back to images \citep{videogpt,magvit,ivideogpt,fsq}. Recent verifiable reward frameworks further suggest that these models can be improved after pre-training by sampling a group of candidate futures, scoring decoded predictions against ground-truth frames, and applying GRPO to reinforce candidates with higher within-group rewards \citep{rlvrworld,grpo}. This pipeline is attractive because it optimizes against measurable prediction errors rather than a learned critic.
+Video world models predict action-conditioned future observations and thereby provide sampleable dynamics for robotic planning, interactive simulation, and model-based reinforcement learning \citep{worldmodels,rssm,dreamerv3,dws}. Tokenized implementations make high-dimensional video prediction tractable by encoding frames into discrete visual tokens, modeling future tokens autoregressively, and decoding them back to images \citep{videogpt,magvit,ivideogpt,fsq}. Verifiable-reward post-training offers a complementary route to improvement: for each context and action sequence, it samples a group of candidate futures, scores their decoded frames against observed futures, and applies GRPO to reinforce candidates with higher within-group rewards \citep{rlvrworld,grpo}. This is especially attractive for world models because the supervision is externally computable and directly tied to prediction fidelity.
 
-This paper studies a narrower but important question: when the world model is tokenized, is the decoded full-reference reward the right signal for GRPO, especially in multi-step rollouts? We find two structural mismatches. First, post-decode verifiers compare candidates with raw ground truth even though the ground truth is not exactly reachable through the tokenizer--decoder pair. Second, multi-step GRPO often collapses a rollout into one sequence-level advantage, even though video prediction is autoregressive and frame errors propagate across horizons. These mismatches are easy to miss because the training loop remains verifiable: every candidate is still compared with a known target.
+Existing research has progressed along three largely separate directions. World-model and tokenizer work improves the generative backbone or the visual representation \citep{vqvae,vqgan,fsq}; verifier design selects decoded full-reference metrics such as MSE, SSIM, and LPIPS \citep{ssim,lpips}; and GRPO variants refine the optimization objective or assign finer credit to reasoning and generative trajectories \citep{grpolambda,spo,sdgrpo,stepwiseflowgrpo,dapo}. None of these directions resolves two mismatches created when a frozen visual tokenizer is placed inside a group-relative video post-training loop. First, every decoded candidate belongs to the decoder-reachable set, whereas a raw ground-truth frame is generally not exactly reproducible by the same tokenizer. Group centering removes the candidate-independent part of this reconstruction residual, but not its interaction with candidate errors; that interaction can reverse the pairwise ordering that GRPO actually consumes. The problem is therefore not merely a large reconstruction error or a missing image metric, but an unreliable relative preference on the policy's feasible outputs. Second, multi-step video GRPO commonly broadcasts one sequence-level advantage to all future-frame token blocks. This ignores their asymmetric downstream influence, while independent frame-level advantages are myopic because they sever credit from later frames that depend on earlier generations.
 
-The first failure mode is verifier-side. A lossy visual tokenizer imposes an irreducible encode-decode residual on the ground-truth frame. We call this residual the reconstruction floor. It is not caused by any sampled candidate, but post-decode metrics such as MSE, SSIM, and LPIPS still include it when scoring decoded predictions \citep{ssim,lpips}. For ordinary evaluation, this is a reconstruction-quality limit of the tokenizer \citep{vqvae,vqgan,perceptiondistortion}. For GRPO, it is a ranking problem: group normalization removes any candidate-independent offset, so the floor's mean alone cannot bias the update; what corrupts training is the candidate-dependent component of the reconstruction residual, which reorders candidates within the sample group and changes which of them receives positive advantage.
+To address both mismatches, we introduce \emph{RC-GRPO} while leaving candidate sampling, the frozen visual tokenizer, the decoder, and raw-frame evaluation unchanged. On the verifier side, a \emph{Reachability Audit} rescoring the same candidate group against the raw frame and its tokenizer reconstruction measures rank correlation and pairwise preference flips before training. The reconstruction-calibrated verifier then retains the original MSE and LPIPS but compares candidates with the reachable reconstruction $\tilde{s}'_h=D(Q(E(s'_h)))$. Because replacing the target can alter progress toward raw ground truth, a raw-anchored update constructs raw and calibrated group-relative surrogates on the same candidates and projects the calibrated direction onto a half-space that preserves first-order progress under the raw surrogate. On the temporal side, the $t$-th future-frame token block receives the return of frame rewards from $t$ to the end of the rollout, normalized only across candidates at the same temporal position. RC-GRPO thus forms one chain of reachable-set comparison, raw-fidelity-constrained updating, and autoregressive block-level credit, rather than appending more image metrics to a generic GRPO variant.
 
-The second failure mode is temporal. In a multi-step video rollout, early generated frames become the context for later predictions. A late error can therefore reflect earlier choices, later choices, or their interaction. Sequence-level GRPO ignores this structure by assigning the same normalized advantage to all generated tokens in the rollout. Fine-grained credit assignment has been explored for GRPO-style training in language reasoning and generative trajectories \citep{grpolambda,spo,sdgrpo,stepwiseflowgrpo,dapo}, but tokenized video has a different natural unit of credit: a future frame is represented by a block of visual tokens and evaluated by a frame-level verifier.
-
-We propose \emph{RC-GRPO}, a reconstruction-calibrated temporal credit assignment method for tokenized video world models. RC-GRPO keeps the sample-group, verifiable-reward, and group-relative update structure intact, but changes the target and the credit unit. For verifier calibration, it replaces the raw ground-truth frame with the tokenizer-reachable target $\tilde{s}_t = D(E(s_t))$, so decoded predictions are compared in the same reachable image space. For temporal credit assignment, it computes frame-level rewards in multi-step rollouts and forms temporal-return advantages for each future-frame token block. Early tokens can then receive credit through later frame quality, while horizon-specific prediction errors are no longer mixed into a single scalar advantage.
-
-Our contributions are twofold. First, we identify reconstruction-induced rank corruption in tokenized video GRPO and introduce a reconstruction-calibrated (RC) verifier that replaces the raw target with its tokenizer-reachable reconstruction. Pairwise reward disagreements follow the predicted $\arccos(\rho)/\pi$ relation across three reward spaces; on identical candidate groups, RC reduces disagreement with a pre-decode reference, and it lowers final LPIPS and MSE relative to the raw verifier in all five paired training seeds. Second, we introduce temporal-return GRPO for multi-step video rollouts. It assigns future-frame quality back to the token blocks that can affect it, obtains lower mean full-rollout and last-frame LPIPS than sequence-level RC in four of five seeds, and exhibits increasingly favorable deltas at later horizons. Controlled negative results bound these claims: adding further pre- or post-decode reward components does not pass our offline admission tests, and the evidence supports full-reference fidelity rather than a general improvement in motion or distributional realism.
+Our contributions are twofold. First, we identify target-set mismatch as a candidate-ranking failure in tokenized video post-training and develop reachability-constrained rank calibration, comprising a pre-training audit, a reconstruction-calibrated verifier, and a raw-anchored update. Reconstruction audits establish non-negligible encode--decode reconstruction errors for CNN-FSQ, compressive FSQ, and the independently designed Cosmos DV-FSQ codec; same-candidate audits on RT-1 and VP2-RoboSuite further show improved agreement with decoder-input representation error and fewer pairwise flips across different tokenizers and generative architectures. All final fidelity metrics remain evaluated against raw ground truth. These audits establish the cross-codec reconstruction mismatch and cross-world-model ranking mechanism, not a universal raw-pixel training gain. Second, we introduce frame-block temporal-return credit assignment for autoregressive video rollouts, changing the credit unit from an entire sequence to the future-frame token block and returning later visual quality only to blocks that can influence it. Under an episode-disjoint RT-1 evaluation, temporal return improves all five mean fidelity metrics over sequence-level calibration; MSE improves in 5/5 paired seeds and LPIPS, LPIPS-last, PSNR, and SSIM in 4/5. Our claims are limited to directional full-reference evidence and do not imply universal improvements in motion fidelity or distributional realism.
 
 \section{Related Work}
 
@@ -162,13 +158,13 @@ Our contributions are twofold. First, we identify reconstruction-induced rank co
 World models learn predictive environment dynamics that can support planning, control, and simulation from visual observations \citep{worldmodels,rssm,dreamerv2,dreamerv3}. Recent video generative models extend this idea by modeling future visual observations directly, often through tokenized sequence modeling. VideoGPT, MAGVIT, iVideoGPT, Genie, and pre-trained video simulators show that discrete visual tokens and autoregressive or masked sequence models can support scalable video prediction and interactive generation \citep{videogpt,magvit,ivideogpt,genie,dws}. These works mainly study how to build or pre-train a sampleable video world model. Our focus is different: given a tokenized video world model and a verifiable post-training loop, we study whether the decoded verifier target and the sequence-level GRPO update match the structure of tokenized multi-step video prediction.
 
 \paragraph{Verifiable reward post-training.}
-Verifiable reward training samples multiple candidate outputs for the same context, scores them with an externally computable reward, and applies group-relative policy updates without a learned value function. RLVR-World instantiates this idea for world models, while GRPO and related RLVR-style methods have been widely explored in language reasoning and post-training \citep{rlvrworld,grpo,deepseekr1}. Recent variants analyze length bias, clipping behavior, large-scale optimization, classification-style rank labels, and adaptive policy objectives \citep{drgrpo,dapo,gspo,realrlvr,sapo}. We do not treat these optimizer variants as direct solutions to tokenized video post-training. In our setting, the verifier itself can corrupt within-group rankings because decoded candidates are compared with targets that are not exactly reachable through the tokenizer-decoder pair. This shifts the relevant intervention from a generic optimizer swap to video-structured verifier calibration.
+Verifiable reward training samples multiple candidate outputs for the same context, scores them with an externally computable reward, and applies group-relative policy updates without a learned value function. RLVR-World instantiates this idea for world models, while GRPO and related RLVR-style methods have been widely explored in language reasoning and post-training \citep{rlvrworld,grpo,deepseekr1}. Recent variants change normalization, clipping, importance ratios, or sample selection. We do not treat generic optimizer variants as direct solutions to tokenized video post-training. In our setting, the verifier itself can alter within-group rankings because decoded candidates are compared with targets that are not exactly reachable through the tokenizer-decoder pair. This shifts the relevant intervention from an optimizer swap to video-structured verifier calibration.
 
 \paragraph{Visual tokenizers and evaluation metrics.}
-Discrete visual representation learning compresses images or videos into token sequences that can be modeled by transformers, but lossy tokenization introduces an encode-decode reconstruction limit \citep{vqvae,vqgan,fsq}. This limit is closely related to the broader perception-distortion tradeoff in image reconstruction \citep{perceptiondistortion}. Full-reference metrics such as SSIM and LPIPS are commonly used to evaluate per-sample fidelity, whereas FID, KID, FVD, DINO-based distances, precision/recall, and density/coverage evaluate distribution-level fidelity and diversity \citep{ssim,lpips,fid,kid,fvd,dinov2,precisionrecall,densitycoverage}. These metrics are usually used for reporting generation quality. We instead ask what happens when a post-decode full-reference metric becomes the reward consumed by GRPO: distribution-level metrics do not directly provide a per-candidate verifier, while post-decode per-sample metrics inherit the tokenizer reconstruction floor and can alter candidate rankings.
+Discrete visual representation learning compresses images or videos into token sequences that can be modeled by transformers, but lossy tokenization introduces an encode-decode reconstruction limit \citep{vqvae,vqgan,fsq}. This limit is closely related to the broader perception-distortion tradeoff in image reconstruction \citep{perceptiondistortion}. Full-reference metrics such as SSIM and LPIPS are commonly used to evaluate per-sample fidelity, whereas FID, KID, FVD, DINO-based distances, precision/recall, and density/coverage evaluate distribution-level fidelity and diversity \citep{ssim,lpips,fid,kid,fvd,dinov2,precisionrecall,densitycoverage}. These metrics are usually used for reporting generation quality. We instead ask what happens when a post-decode full-reference metric becomes the reward consumed by GRPO: distribution-level metrics do not directly provide a per-candidate verifier, while post-decode per-sample metrics inherit the tokenizer reconstruction residual and can alter candidate rankings.
 
 \paragraph{Fine-grained credit assignment.}
-Sequence-level advantages can be too coarse when a generation trajectory contains multiple reasoning steps, semantic segments, or generation stages. Recent GRPO-style work addresses this issue through eligibility-trace credit assignment, segment-level policy optimization, verifiable segment decomposition, stepwise credit for flow-matching generation, and token-level loss shaping in large-scale RL systems \citep{grpolambda,spo,sdgrpo,stepwiseflowgrpo,dapo}. RC-GRPO adapts this principle to tokenized video rather than reusing token-level or denoising-step credit directly. In a video rollout, the natural credit unit is a future-frame block of visual tokens, and each block is scored by a frame-level full-reference verifier. This motivates temporal-return advantages over frame blocks after reconstruction-calibrated verifier targets, rather than a task-agnostic GRPO objective.
+Sequence-level advantages can be too coarse when a generation trajectory contains multiple decisions or generation stages. Classical return-based credit assignment and recent step-level post-training methods both distinguish delayed outcomes from immediate rewards. RC-GRPO applies this principle to tokenized autoregressive video rather than claiming reward-to-go as a new construction. Here the credit unit is a future-frame block of visual tokens, each decoded into a state prediction that can be scored against its observed future frame. This motivates temporal-return advantages over frame blocks rather than one task-agnostic rollout scalar.
 
 \section{Preliminaries}
 
@@ -214,10 +210,10 @@ and broadcasts the resulting advantage to all generated tokens in the rollout. T
 % ------------------------------------------------------------------
 
 \paragraph{Overview.}
-RC-GRPO keeps the RLVR-style sample group, verifiable reward, and group-relative update intact, but changes two parts of the training signal that are specific to tokenized video. First, decoded predictions are compared with a tokenizer-reachable target rather than with the raw ground-truth image. Second, in multi-step rollouts, the advantage is assigned to future-frame token blocks through temporal returns rather than broadcast as one rollout-level scalar. The method therefore addresses verifier-side target mismatch and rollout-side credit mismatch without changing the tokenizer, decoder, or autoregressive world-model architecture.
+RC-GRPO keeps the RLVR-style sample group, verifiable metric, and world-model architecture intact, but changes how the training signal is constructed. It audits and calibrates the verifier target to the frozen codec's reachable set, anchors the calibrated gradient to first-order progress under the raw verifier, and assigns multi-step advantages to future-frame token blocks through temporal returns rather than broadcasting one rollout-level scalar.
 
 \paragraph{Reconstruction-calibrated verifier.}
-For a full-reference distance $d$, a lossy tokenizer induces a reconstruction floor
+For a full-reference distance $d$, a lossy tokenizer induces an encode--decode reconstruction residual
 \begin{equation}
 \phi_{\mathrm{tok}}^{(d)}
 =
@@ -226,7 +222,7 @@ For a full-reference distance $d$, a lossy tokenizer induces a reconstruction fl
 \end{equation}
 This term is not caused by a sampled candidate, but it is included when a post-decode verifier compares a decoded prediction with the raw frame. For a candidate group, let $\delta_i=r_i^{\mathrm{raw}}-r_i^{\mathrm{reach}}$, $c=G^{-1}\sum_i\delta_i$, and $\eta_i=\delta_i-c$. Then $r_i^{\mathrm{raw}}=r_i^{\mathrm{reach}}+c+\eta_i$. Group centering removes $c$, but not the candidate-dependent $\eta_i$; the latter can therefore change within-group ranks and spacings. RC-GRPO removes this target mismatch by replacing the raw target $s_t$ with the tokenizer-reachable target
 \begin{equation}
-\tilde{s}_t = D(E(s_t)).
+\tilde{s}_t = D(Q(E(s_t))).
 \end{equation}
 Given a decoded prediction $\hat{s}_{i,t}$, the reconstruction-calibrated reward is
 \begin{equation}
@@ -245,6 +241,21 @@ r_{i,t}^{\mathrm{RC}}
 \right].
 \end{equation}
 The raw verifier used for comparison replaces $\tilde{s}_t$ with $s_t$. The target remains verifiable because $\tilde{s}_t$ is deterministically obtained from the ground-truth frame and the frozen tokenizer; the change is that reward construction compares candidates in the image space reachable by the tokenizer--decoder pair. Final evaluation remains against the raw frame $s_t$, so the calibrated target cannot improve a reported metric by definition alone.
+
+\paragraph{Raw-anchored calibrated update.}
+Replacing the target can improve reachable-space ordering without guaranteeing finite-step progress on raw-frame fidelity. We therefore construct raw and calibrated GRPO surrogate losses on the same candidates and with the same credit mode. Let $g_0=\nabla_\theta\ell_{\mathrm{raw}}$ and $g_1=\nabla_\theta\ell_{\mathrm{RC}}$. We choose the direction closest to $g_1$ whose first-order raw-surrogate progress is at least that of the raw update:
+\begin{equation}
+g^*=\arg\min_g\frac{1}{2}\|g-g_1\|_2^2
+\quad\mathrm{s.t.}\quad
+\langle g,g_0\rangle\geq\|g_0\|_2^2.
+\end{equation}
+The half-space projection has the closed form
+\begin{equation}
+g^*=g_1+\lambda^*g_0,\qquad
+\lambda^*=\frac{[\|g_0\|_2^2-\langle g_1,g_0\rangle]_+}
+{\|g_0\|_2^2+\epsilon}.
+\end{equation}
+This is a sampled-surrogate, first-order constraint rather than a guarantee on held-out raw LPIPS. The reference-policy regularizer is added once after the projection.
 
 \paragraph{Temporal-return GRPO.}
 Let a candidate rollout contain $H$ future-frame token blocks $o_{i,t,1:N}$, where $N$ is the number of visual tokens per frame block. Standard sequence-level GRPO assigns the group-normalized advantage of the rollout-level scalar $R_i^{\mathrm{seq}}$ in Eq.~\ref{eq:seqreward} to every generated token. RC-GRPO instead computes a temporal return for each future-frame block,
@@ -291,17 +302,17 @@ If $A_{i,t}^{\mathrm{return}}$ is replaced by the same sequence-level advantage 
 \widehat{D}_{\mathrm{KL}}
 \left(\pi_\theta\|\pi_{\mathrm{ref}}\right),
 \end{equation}
-where $\pi_{\mathrm{ref}}$ is the frozen base world model and $\widehat{D}_{\mathrm{KL}}$ is a per-token log-probability-difference estimate on the sampled rollout tokens. Each sampled group is consumed by exactly one gradient step, so the update remains on-policy and requires no importance ratio or clipping. The anchor is applied consistently across multi-step arms to reduce policy drift; horizon-aware variants and gain-shaped rewards are treated as ablations rather than as part of the main method.
+where $\pi_{\mathrm{ref}}$ is the frozen base world model. Following the official video recipe, we use the sampled low-variance form $\exp(k)-k-1$ with $k=\log\pi_{\mathrm{ref}}-\log\pi_\theta$. Each sampled group is consumed by exactly one gradient step. The anchor is applied consistently across multi-step arms to reduce policy drift; horizon-aware variants and gain-shaped rewards are not part of the method.
 
 \section{Experiments}
 
 \paragraph{Experimental setup.}
-We evaluated RC-GRPO on the RT-1 	exttt{fractal20220817} action-conditioned video data \citep{rt1} using the public RLVR-World multi-step base checkpoint and its fixed visual tokenizer \citep{rlvrworld}. The fixed split contains 24 training windows and 8 held-out evaluation windows; each window has one context frame and $H=7$ future frames. At every update, the policy samples $G=16$ candidate rollouts with temperature $1.0$ and top-$k=100$. Unless otherwise stated, multi-step runs use 30 optimization steps, learning rate $10^{-5}$, two sampled windows per step, evaluation every 10 steps, temporal discount $\beta=0.95$, advantage normalization $\epsilon=10^{-6}$, and a reference-policy anchor with $\lambda_{\mathrm{KL}}=0.001$. Because the first future frame carries no direct reward, per-horizon evaluation covers $t=2,\dots,7$, and LPIPS-last reports horizon 7. We compare the base checkpoint, the public multi-step RLVR-World checkpoint, raw and RC sequence-level GRPO, and temporal-credit variants; every trained arm uses paired seeds 0--4. We fixed the 30-step budget for all main comparisons after a preliminary stability study and report the final checkpoint, without selecting the best step. All held-out metrics compare predictions with raw future frames, never with reconstructed targets; lower LPIPS, LPIPS-last, and MSE indicate better full-reference fidelity.
+We evaluated RC-GRPO on the RT-1 \texttt{fractal20220817} action-conditioned video data \citep{rt1} using the public RLVR-World multi-step base checkpoint and its fixed visual tokenizer \citep{rlvrworld}. Training uses 24 fixed windows, one context frame, and seven future frames. Formal evaluation uses all 32 stride-8 windows from eight episodes absent from training. Each update samples $G=16$ rollouts with temperature $1.0$ and top-$k=100$. All formal multi-step runs use 30 updates, learning rate $10^{-5}$, two windows per update, temporal discount $\beta=0.95$, and the official sampled low-variance KL with coefficient $0.001$. Every arm uses paired seeds 0--4 and the fixed final checkpoint. All metrics compare predictions with raw future frames, never reconstructed targets. We additionally audit frozen candidate groups on VP2-RoboSuite to test whether rank calibration transfers across tokenizers and generative architectures, and use NVIDIA Cosmos DV-FSQ \citep{nvidia2025cosmoswfm} as an independent codec reconstruction-floor audit without making a candidate-ranking claim for Cosmos.
 
 \begin{figure}[t]
 \centering
 \includegraphics[width=\columnwidth]{Figures/fig_rank_flip.pdf}
-\caption{Rank-disagreement diagnostic for decoded verifiers. Across five generation repetitions, the observed pairwise disagreement with a pre-decode code-space reference closely follows the predicted $\arccos(\rho)/\pi$ rate. The code-space score is used as a floor-free diagnostic reference, not asserted to be the uniquely correct reward.}
+\caption{Rank-disagreement diagnostic for decoded verifiers. Across five generation repetitions, the observed pairwise disagreement with a pre-decode code-space reference closely follows the predicted $\arccos(\rho)/\pi$ rate. The code-space score is used as a residual-free diagnostic reference, not asserted to be the uniquely correct reward.}
 \label{fig:rank_flip}
 \end{figure}
 
@@ -310,95 +321,39 @@ Before evaluating training outcomes, we tested whether reconstruction-induced re
 
 \begin{table*}[t]
 \centering
-\caption{Multi-step prediction under our fixed held-out protocol. Rows marked \emph{Ours} are reconstruction-calibrated and temporal-credit variants. The public RLVR-World checkpoint is evaluated on our held-out split and is not a reproduction of its training recipe. The $\Delta$ row reports the relative error reduction of full RC-GRPO over that checkpoint. Values are mean $\pm$ sample standard deviation over listed seeds unless evaluation-only.}
+\caption{Episode-disjoint multi-step comparison using the sampled low-variance KL objective. Trained rows report means over paired seeds 0--4 at the fixed final checkpoint on 32 windows from eight episodes absent from training. The public RLVR-World checkpoint is evaluation-only.}
 \label{tab:main_multistep}
 \small
-\begin{tabular}{lcccc}
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{lcccccc}
 \toprule
-Method & Seeds & LPIPS $\downarrow$ & LPIPS-last $\downarrow$ & MSE $\downarrow$ \\
+Method & Seeds & LPIPS $\downarrow$ & LPIPS-last $\downarrow$ & MSE $\downarrow$ & PSNR $\uparrow$ & SSIM $\uparrow$ \\
  \midrule
-Base world model & eval-only & 0.2157 & 0.2260 & 0.01484 \\
-RLVR-World checkpoint & eval-only & 0.2115 & 0.2155 & 0.01378 \\
-Seq-GRPO, raw verifier & 0--4 & 0.2082 $\pm$ 0.0064 & 0.2226 $\pm$ 0.0181 & 0.01405 $\pm$ 0.00054 \\
+Base world model & eval-only & 0.21273 & 0.22783 & 0.015480 & 18.827 & 0.73749 \\
+RLVR-World checkpoint & eval-only & 0.20403 & 0.21206 & 0.014390 & 19.106 & 0.75323 \\
+Seq-GRPO, raw verifier & 0--4 & 0.19915 & 0.21180 & 0.013679 & 19.403 & 0.75555 \\
 \midrule
-Seq-GRPO, RC verifier (\emph{Ours}) & 0--4 & 0.2009 $\pm$ 0.0042 & 0.2096 $\pm$ 0.0046 & 0.01307 $\pm$ 0.00073 \\
-RC-GRPO, temporal return (\emph{Ours, full}) & 0--4 & $\mathbf{0.1980 \pm 0.0034}$ & $\mathbf{0.2055 \pm 0.0026}$ & $\mathbf{0.01276 \pm 0.00069}$ \\
-RC-GRPO, gain return (\emph{Ours, ablation}) & 0--4 & 0.1989 $\pm$ 0.0070 & 0.2072 $\pm$ 0.0068 & 0.01271 $\pm$ 0.00101 \\
-RC-GRPO, frame advantage (\emph{Ours, ablation}) & 0--4 & 0.2086 $\pm$ 0.0035 & 0.2164 $\pm$ 0.0051 & 0.01431 $\pm$ 0.00030 \\
+Seq-GRPO, RC verifier (\emph{Ours}) & 0--4 & 0.19933 & 0.21176 & 0.013820 & 19.382 & 0.75577 \\
+Temporal return, raw verifier & 0--4 & 0.20118 & 0.21487 & 0.013941 & 19.341 & 0.75362 \\
+Temporal return, RC verifier (\emph{Ours}) & 0--4 & $\mathbf{0.19657}$ & $\mathbf{0.20767}$ & $\mathbf{0.013556}$ & $\mathbf{19.447}$ & $\mathbf{0.75908}$ \\
 \midrule
-$\Delta$ over RLVR-World (full ours) & -- & $\mathbf{+6.4\%}$ & $\mathbf{+4.6\%}$ & $\mathbf{+7.4\%}$ \\
+$\Delta$ vs. sequence RC & -- & $\mathbf{-1.39\%}$ & $\mathbf{-1.93\%}$ & $\mathbf{-1.91\%}$ & $\mathbf{+0.33\%}$ & $\mathbf{+0.44\%}$ \\
 \bottomrule
 \end{tabular}
 \end{table*}
 
-\begin{figure*}[t]
-\centering
-\includegraphics[width=0.98\textwidth]{Figures/fig_msp_learning_curves.pdf}
-\caption{Post-training learning curves under the fixed multi-step protocol. Curves show the mean over five seeds with one-sample-standard-deviation bands. RC-GRPO with temporal-return credit reaches the lowest mean final full-rollout and last-frame LPIPS.}
-\label{fig:msp_learning}
-\end{figure*}
-
-\FloatBarrier
-
 \paragraph{Main results.}
-Table~\ref{tab:main_multistep} and Figure~\ref{fig:msp_learning} show that reconstruction calibration transfers to multi-step rollouts. On paired seeds 0--4, replacing the raw target with its tokenizer-reachable reconstruction lowers LPIPS by $0.0073 \pm 0.0099$ (5/5 seeds), LPIPS-last by $0.0130 \pm 0.0212$ (4/5), and MSE by $0.0010 \pm 0.0012$ (5/5). The paired $t$ statistics ($-1.7$, $-1.4$, and $-1.8$) are not significant at $n=5$, so these are directional multi-seed results rather than significance claims. Full RC-GRPO gives the lowest mean final values on all three metrics. Under our held-out evaluation protocol, every full-method seed also scores below the single public RLVR-World checkpoint on LPIPS, LPIPS-last, and MSE; this comparison does not imply matched training recipes.
+Table~\ref{tab:main_multistep} reports the formal episode-disjoint factorial. Temporal return with the RC verifier attains the best mean on all five metrics. Relative to sequence-level RC, it reduces LPIPS by $0.002764$ (4/5 paired seeds, $t=-1.94$, two-sided $p=0.125$), LPIPS-last by $0.004093$ (4/5, $t=-1.79$, $p=0.149$), and MSE by $0.000264$ (5/5, $t=-2.40$, $p=0.074$), while improving PSNR and SSIM in 4/5 seeds. The exact one-sided sign-flip test for MSE is $p=0.031$, but none of the paired $t$ tests reaches two-sided $0.05$. The four-arm LPIPS interaction is also nonsignificant ($p=0.309$), so the lowest full-stack mean is not evidence of statistical super-additivity.
 
-\begin{figure*}[!t]
-\centering
-\includegraphics[width=0.90\textwidth]{Figures/fig_horizon_delta.pdf}
-\caption{Per-horizon effect of temporal-return credit. Each panel shows temporal-return RC minus sequence-level RC over five paired seeds. Mean deltas become increasingly favorable toward later horizons across LPIPS, MSE, PSNR, and SSIM; correlated horizons are not treated as independent trials.}
-\label{fig:horizon_delta}
-\end{figure*}
+\paragraph{Cross-codec reconstruction residual and cross-world-model rank audits.}
+We next test the C1 mechanism without assuming that an improved diagnostic must already translate into raw-pixel gains after policy optimization. Under the same LPIPS-VGG readout, the encode--decode reconstruction residual is approximately $0.053$ for CNN-FSQ, $0.077$ for compressive FSQ, and $0.190$ for the independently designed NVIDIA Cosmos DV-FSQ video codec. These values establish non-negligible reconstruction residuals across three FSQ codec instances; because their resolutions and temporal compression protocols differ, we do not interpret the magnitudes as a controlled monotonic compression law. On VP2-RoboSuite, where matched candidate groups are available, RC increases same-candidate Spearman agreement by $0.0932$ at horizon 2 and by $0.0753$ at horizon 8, while reducing pairwise disagreement by $0.0409$ and $0.0346$, respectively. The bootstrap confidence intervals exclude zero. Thus the reconstruction audit and the rank audit play distinct roles: Cosmos tests whether the target mismatch recurs in an independent codec, whereas VP2 tests whether reachable-target calibration repairs candidate ordering in another world-model pipeline.
 
-\begin{table}[t]
-\centering
-\caption{Component ablations for RC-GRPO. Each row reports the first method minus its comparator: RC verifier vs. raw sequence GRPO; temporal return vs. sequence RC; frame advantage, gain shaping, and horizon KL vs. temporal-return RC. Negative deltas are better. Wins count seeds favoring the first method.}
-\label{tab:ablation_multistep}
-\footnotesize
-\setlength{\tabcolsep}{3pt}
-\begin{tabular}{lcccc}
-\toprule
-Ablation & Seeds & LPIPS $\Delta$ & Last $\Delta$ & Wins \\
-\midrule
-RC verifier (\emph{Ours}) & 0--4 & $-0.0073$ & $-0.0130$ & 5/5, 4/5 \\
-Temporal return (\emph{Ours}) & 0--4 & $-0.0029$ & $-0.0041$ & 4/5, 4/5 \\
-Frame advantage & 0--4 & $+0.0105$ & $+0.0109$ & 0/5, 0/5 \\
-Gain shaping & 0--4 & $+0.0009$ & $+0.0017$ & 1/5, 2/5 \\
-Horizon KL & 0--2 & $+0.0008$ & $+0.0013$ & 1/3, 1/3 \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-\paragraph{Per-horizon analysis.}
-Figure~\ref{fig:horizon_delta} isolates the GRPO-side contribution by comparing temporal-return RC-GRPO with sequence-level RC-GRPO. Over 30 seed--horizon cells (five seeds, horizons 2--7), temporal-return credit lowers LPIPS on 22/30 cells, MSE on 20/30, and MAE on 20/30, while increasing PSNR and SSIM on 21/30 each. Because horizons within a seed are correlated, these tallies show directional consistency rather than 30 independent trials. The mean LPIPS delta grows from $-0.0016$ at horizon 2 to $-0.0041$ at horizon 7; the latter comparison has paired $t=-2.0$ over five seeds and remains short of conventional significance. This horizon-dependent signature is consistent with assigning later-frame quality back to earlier token blocks, but does not by itself identify a causal interaction between the two method components.
-
-\paragraph{Ablations and negative results.}
-Table~\ref{tab:ablation_multistep} summarizes variants around the main method. Replacing sequence-level RC with temporal returns lowers mean LPIPS by $0.0029$ and LPIPS-last by $0.0041$ in 4/5 paired seeds, although neither comparison is significant at $n=5$. The frame-advantage control isolates the return structure: normalizing each horizon independently without accumulating future rewards is substantially worse than temporal-return RC (LPIPS $+0.0105$, paired $t=+6.2$; LPIPS-last $+0.0109$, $t=+5.1$; 0/5 wins) and is also worse than sequence-level RC. Thus, finer normalization alone is insufficient; retaining future rewards in each block's return is structurally important in this protocol. Gain shaping and horizon-aware KL do not improve temporal-return RC. Offline admission tests likewise assign zero marginal weight to two pre-decode signals and find no margin-stable gain from four additional post-decode metrics, so neither metric proliferation nor those generic variants enter the final method. We also do not claim broad dynamic-quality improvement: the dynamic-direction proxy dmotion improves on only 14/30 seed--horizon cells. The supported claim is full-reference multi-step fidelity.
-
-\paragraph{Reward-independent readout.}
-As a preliminary distribution-level check (seed 0, evaluation only), we embed predicted frames with DINOv2 and compute Fr\'echet and kernel distances against real held-out frames. Every post-trained checkpoint, including the public RLVR-World checkpoint, has worse KID than the base model (base $5.1$, RLVR-World $6.6$, raw sequence GRPO $13.2$, sequence RC $12.4$, temporal-return RC $9.8$). This single-seed association suggests that improved per-sample fidelity need not preserve distributional realism, but it is insufficient to establish a general trade-off. We therefore report it only as a preliminary boundary result.
-
-% ------------------------------------------------------------------
-% RESERVED: Figure (qualitative results).
-% Planned content: side-by-side frames at horizons {2,4,7} for
-% base / seq-raw / seq-RC / return-RC vs. ground truth on 2-3 held-out
-% windows (prefer one with visible arm/object motion), optionally with
-% error heatmaps. Suggested placement: figure* before or after the
-% per-horizon analysis. Uncomment when Figures/fig_qualitative.pdf is ready.
-% \begin{figure*}[t]
-% \centering
-% \includegraphics[width=0.95\textwidth]{Figures/fig_qualitative.pdf}
-% \caption{Qualitative multi-step predictions on held-out windows.
-% Reconstruction calibration removes verifier-side target mismatch and
-% temporal-return credit sharpens later horizons; rows show increasing
-% horizon, columns compare methods against the real frames.}
-% \label{fig:qualitative}
-% \end{figure*}
-% ------------------------------------------------------------------
+\paragraph{Evidence boundary and pending controls.}
+The cross-platform result above establishes rank repair, not universal improvement under a raw-ground-truth evaluation target. A three-seed RT-1 pilot supports the proposed raw-anchored update, whereas VP2 has not shown a reliable raw-pixel training gain; Cosmos has no matched policy-training experiment. We therefore keep cross-platform policy improvement outside the present claim. For temporal credit, the formal result is the paired five-seed comparison in Table~\ref{tab:main_multistep}; sequence, framewise, return, and shuffled-return controls under the same low-variance-KL objective remain the required test for attributing the gain specifically to future-return structure. We likewise make no claim about motion quality or distributional realism from the current full-reference results.
 
 \section{Conclusion}
 
-Post-decode verifiers and sequence-level advantages each overlook structure in tokenized video: the raw target lies outside the tokenizer-reachable image space, and one scalar advantage cannot distinguish the responsibility of autoregressive future-frame blocks. RC-GRPO modifies these two interfaces. Reachable-target calibration reduces measured disagreement with a pre-decode diagnostic reference and lowers final fidelity errors relative to the raw verifier across paired seeds. Temporal-return credit gives the best mean final fidelity in our comparison and shows increasingly favorable later-horizon deltas, while the direct return-versus-sequence comparison remains statistically underpowered at five seeds. The evidence is bounded to one action-conditioned prediction interface: longer training can drift, dmotion does not improve, and a single-seed distributional check worsens for every post-trained arm. Within this scope, the results support aligning verifiers and credit units with the tokenized video generation process.
+Post-decode verifiers and sequence-level advantages each overlook structure in tokenized video: the raw target need not lie in the frozen codec's reachable image set, and one sequence-level advantage cannot distinguish the responsibility of autoregressive future-frame blocks. RC-GRPO modifies these two interfaces. Non-negligible encode--decode reconstruction errors across CNN-FSQ, compressive FSQ, and Cosmos DV-FSQ show that target mismatch is not confined to one project tokenizer; reachable-target calibration then reduces same-candidate rank disagreement on RT-1 and VP2-RoboSuite, while the raw-anchored update preserves the original evaluation direction when the two verifier gradients disagree. Temporal-return credit achieves the best mean RT-1 fidelity on training-disjoint episodes, with MSE improving in all five paired seeds and the remaining metrics in four. Cross-platform raw-pixel policy gains, conventional two-sided significance, and the full set of temporal-structure controls remain evidence boundaries. Within this scope, the results support aligning both verifier targets and credit units with the tokenized video generation process.
 
 \paragraph{Data and code availability.}
 We use the publicly available RT-1 data cited above. Processed source data for all manuscript figures are included with the submission, together with analysis scripts and the configurations needed to reproduce the reported tables. Training code and model-output summaries are provided in the anonymous supplementary archive.

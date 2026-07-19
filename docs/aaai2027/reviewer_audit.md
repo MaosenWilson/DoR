@@ -2,54 +2,73 @@
 
 ## Review Setup
 
-- Input scope：当前 story、method、experiments 与已有 RT-1 结果；
-- Assessment boundary：Rank-Reliable Return、固定 $n=10$、raw-return 因子臂和长度泛化尚未完成；
-- Shared claim：tokenized video RLVR 存在输出空间 rank corruption 与时间信用错位，RC verifier 和 frame-block temporal returns 分别处理两者；
-- Visible evidence：同候选 flip 闭环、5-seed RC/return 结果、frame-only 强消融、horizon trend、多个负结果；
-- Missing evidence：确认性 $n=10$、完整 $2\times2$、跨 horizon length、第二 tokenizer/dataset、C3 方法结果。
+- 评估范围：当前 Word 主线、`story.md`、`method.md` 与正式 `low_var_kl` 结果；
+- 两项贡献：Reachability-Constrained Rank Calibration；Frame-Block Temporal Return；
+- 已成立证据：三个 FSQ codec 的不可忽略的编解码重建误差、RT-1/VP2 same-candidate rank repair；RT-1 Temporal Return tail fidelity；
+- 尚缺证据：episode-disjoint 复评、时间对应控制、长度压力测试、RoboNet 正式审计；
+- 已删除主张：第三项贡献、统计超加和及跨平台普适 raw-GT gain。
 
-## Reviewer 1
+## Reviewer 1：Novelty and Mechanism
 
-- **Overall assessment：** 问题定位有价值，rank corruption 的机制链是目前最独特部分；但当前 full method 仍由 target projection 与经典 reward-to-go 构成，算法新颖性不足以自动达到强接收。
-- **Who would be interested：** world-model post-training、video RLVR、tokenized generation 和 fine-grained policy optimization 研究者。
-- **Major strengths：** 区分 constant floor 与 candidate-dependent perturbation；同候选闭环避免只凭最终训练曲线讲机制；对 decoded feature metrics 与 pre/post-decode 轴的澄清准确。
-- **Major concerns：** Temporal Return 本质接近标准 Monte Carlo reward-to-go；若没有 rank-reliable temporal component 或更强的 video-specific causal evidence，标题中的 credit assignment 可能被视为直接移植。
-- **Technical failings to resolve：** 完成 fixed $n=10$；补 raw-return 形成 factorial interaction；证明 later-horizon signature 不是 seed/horizon 伪重复；C3 必须有 replay gate、weight controls 与 paired training。
-- **Assessment：** originality 中等，technical motivation 强，method novelty 当前偏弱，readability 经重构后可接受。
-- **Recommendation posture：** borderline；C3 成功或 $2\times2$+length scaling 形成强证据后可上调。
+**总体判断。** C1 的问题识别具有辨识度，但审稿人会把 $D(Q(E(s')))$ 称为显然的 target
+preprocessing，也会指出 $\arccos(\rho)/\pi$ 是经典高斯符号关系。论文必须把新意放在“target-set
+mismatch 如何进入 GRPO 的 candidate-ranking channel、同候选审计和跨 codec 闭环”，而不是声称
+新数学定理。
 
-## Reviewer 2
+**主要攻击。** Raw-anchored update 本质上使用通用 gradient projection；若跨平台 raw-GT gain
+不能成立，它更像防护性工程而非方法贡献。C1 当前最稳的部分是 diagnosis 与 RC rank repair，
+不是性能普适性。
 
-- **Overall assessment：** 实验纪律优于一般小规模论文，但确认性统计与外部有效性仍不足。
-- **Who would be interested：** 关注 RLVR 稳定性、verifier hacking、视频预测评测和 reproducible RL 的读者。
-- **Major strengths：** matched seeds、raw evaluator 不随训练 target 改变、明确报告 DINO/motion 边界、没有把失败的 GSPO/REAL 结果隐藏成成功。
-- **Major concerns：** 当前 return-vs-seq 的 primary LPIPS 只有 $n=5,p=0.212$；大量历史变体可能让审稿人担心 multiple experimentation；单一 RT-1 数据与单一 codec 限制普适性。
-- **Technical failings to resolve：** 固定 $n=10$ 后停止；预先指定 primary/secondary endpoints；episode-cluster 处理 calibration；完整报告所有 seeds；最好增加 $T=4/6/8$ stress test。
-- **Assessment：** technical soundness 尚可，但主要性能主张目前是 trend，不是确认性结论；significance 依赖新增实验。
-- **Recommendation posture：** weak reject 到 borderline；统计补强是硬门槛。
+**投稿前要求。** 明确区分常数重建残差与候选相关交互（candidate-dependent interaction）；保留 raw
+evaluation；报告 VP2 training boundary，并明确 Cosmos 只做 codec floor audit；不得将 RT-1 三 seed
+pilot 写成普适证明。
 
-## Reviewer 3
+## Reviewer 2：Temporal Credit and Causality
 
-- **Overall assessment：** 新故事比“多指标 reward engineering”清晰得多，但论文必须保持克制，避免把系统性负结果包装成贡献。
-- **Who would be interested：** 希望理解何时 verifiable metric 能转化为有效 policy signal 的生成模型和 RL 社区。
-- **Major strengths：** “verifiable does not imply reliable ranking”是清楚的入口；输出空间与时间轴的双层结构适合一张方法总图；边界结果增强可信度。
-- **Major concerns：** C1/C2 若作为两个独立模块仍显拼接；Rank-Reliable Return 是最自然的统一件，但目前完全未验证。标题、摘要和图示不能提前使用 C3。
-- **Technical failings to resolve：** 统一术语；主图展示 raw target mismatch、frame-block return 和 reliability profile；Results 只保留与 claim 直接相关的负证；删除旧 CAST/MG-RC 叙事痕迹。
-- **Assessment：** readability 和 reuse 潜力较好；当前 broad significance 仍受单一 benchmark 限制。
-- **Recommendation posture：** borderline，取决于方法统一和实验闭环。
+**总体判断。** Reward-to-go 是经典构造，Temporal Return 的新颖性不能来自求和公式本身，而必须
+来自 action-conditioned autoregressive frame blocks、per-horizon group normalization 和与 future
+frame verification 对齐的实证设计。
+
+**主要攻击。** episode-disjoint 复评中，Temporal Return 的五指标均值都更好，但 LPIPS 与
+LPIPS-last 仅 4/5、paired $p=0.125/0.149$；MSE 虽为 5/5，paired $t$ test 也只有 $p=0.074$。
+没有 candidate-shuffled control 时，收益仍可能来自 reward rescaling 或额外 normalization，而非
+正确 temporal correspondence。
+
+**投稿前要求。** 完成 $L=1/3$/full/shuffled controls；若通过，再做 $T=4/6/8$ stress test。保持
+full-rollout LPIPS 为 primary、LPIPS-last 为预先指定 temporal endpoint，不事后交换角色。
+
+## Reviewer 3：Experimental Rigor and Scope
+
+**总体判断。** 三平台 rank audit 改善了外部有效性，但 raw-GT training gain 目前只在 RT-1 pilot
+出现。8-episode/32-window 的 episode-disjoint 复评已解决原 readout 的 episode overlap，但完整
+组合相对原始 sequence+raw 仅 2/5 seeds 改善 LPIPS，不能包装成稳健 headline gain。
+
+**主要攻击。** 大量历史变体会引发 multiple experimentation 质疑；若新旧 KL 实现静默混写、
+或不披露 seed/\(n\)/checkpoint 规则，可信度会受损。
+
+**投稿前要求。** 主表写清 episode-disjoint manifest、每个 arm 的 seed 数、实现版本与 checkpoint
+选择规则。旧 linear-KL 只可作附录敏感性，标签须清楚。负结果可压成一张边界表；RoboNet 未完成
+前不把其写成已验证贡献。
 
 ## Cross-Review Synthesis
 
-- **Consensus strengths：** reconstruction-induced rank corruption 是可信且有辨识度的机制；RC 不更换最终 evaluator；frame-only 强消融支持 future-return structure。
-- **Consensus technical risks：** Temporal Return 的经典性、$n=5$ 统计不足、缺 raw-return 因子臂、C3 尚无证据、单一数据与 codec。
-- **Where emphasis differs：** Reviewer 1 更关注算法新颖性；Reviewer 2 更关注统计与 protocol；Reviewer 3 更关注统一叙事和过度主张。
-- **Broad-interest readout：** 如果论文证明 codec-induced ranking reliability 可以预测并改进 temporal credit，它会超出一个 RT-1 reward trick；若只剩 target reconstruction + reward-to-go，意义更局部。
-- **Most important issues：** 依次完成 fixed $n=10$、raw-return factorial arm、Rank-Reliable replay gate；前两项是现有论文硬门槛，第三项决定方法上限。
+**共识优势：** 问题入口清楚；same-candidate design 能隔离 target 变化；三平台 rank mechanism
+不是单一 RT-1 偶然；Temporal Return 在 tail endpoint 上已有配对支持。
 
-## Risk / Unsupported Claims
+**共识风险：** C1 可能被视为 target preprocessing，C2 可能被视为标准 reward-to-go；raw-anchored
+update 缺乏跨平台 performance conversion；full-rollout primary 仍为趋势。
 
-- “首次提出 temporal return”不支持；
-- “空间/metric/GRPO 设计空间已穷尽”不支持；
-- “改善动态与分布质量”被现有数据否定；
-- “Rank-Reliable Return 理论保证恢复干净梯度”不支持；
-- “全面击败 RLVR-World”不支持，只能比较相同 held-out protocol。
+**强投稿优先闭环（可按算力裁剪）：**
+
+1. C1：残差分解 + 三平台 same-candidate audit + raw evaluation + training boundary 说明；
+2. C2：主实现下的 paired multi-step 结果 + 尽量有 shuffled/truncated 或 horizon 控制；
+3. 评测：尽量 episode-disjoint 复评；图/表披露 seed 与 checkpoint 规则；历史实现可并列但须标注。
+
+## Unsupported Claims
+
+- RC/raw-anchored update 在三个平台都改善 raw-GT fidelity；
+- $\arccos(\rho)/\pi$ 是本文原创理论；
+- Temporal Return 或 reward-to-go 本身由本文首次提出；
+- RC 与 Temporal Return 具有统计超加和作用；
+- 方法全面改善 motion、diversity 或 distributional realism；
+- 在不同训练 recipe 下全面击败 RLVR-World。

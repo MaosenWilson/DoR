@@ -18,6 +18,7 @@ import numpy as np
 import torch
 
 from dor.adapters.ivideogpt_vp2 import (
+    DYNAMICS_GRID_TOKENS,
     decoded_ground_truth,
     frame_rewards,
     future_dynamics_latent_reward,
@@ -36,11 +37,19 @@ from dor.gradient_constraints import (
 from dor.kl import sampled_kl_penalty
 from dor.metrics import Metrics
 from dor.temporal_credit import (
+    conservative_adaptive_temporal_advantages,
+    gae_frame_advantages,
+    influence_adaptive_delayed_advantages,
+    influence_adaptive_temporal_advantages,
     normalize_by_horizon,
     reachability_consistent_temporal_scores,
     scale_equalized_temporal_return_advantages,
     temporal_return_advantages,
 )
+
+
+UATR_REWARDS = {"uatr", "uatr_shuffled", "uatr2", "uatr2_shuffled"}
+ANCHORED_REWARDS = {"ra_rc", *UATR_REWARDS}
 
 
 def _read_manifest(path: str | Path, horizon: int) -> list[dict]:
@@ -54,6 +63,10 @@ def _read_manifest(path: str | Path, horizon: int) -> list[dict]:
         if not Path(entry["window_npz"]).is_file():
             raise FileNotFoundError(entry["window_npz"])
     return entries
+
+
+def _file_sha256(path: str | Path) -> str:
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
 def _fixed_context_schedule(n_entries: int, steps: int, batch_windows: int, seed: int):
@@ -81,6 +94,11 @@ def _advantages(reward_frame: np.ndarray, credit: str, gamma: float) -> tuple[np
         return temporal_return_advantages(reward_frame, gamma), True
     if credit == "return_eq":
         return scale_equalized_temporal_return_advantages(reward_frame, gamma), True
+    if credit.startswith("gae"):
+        # "gae0.9" -> critic-free GAE frame-block advantage with lam=0.9.
+        # lam=1 == return, lam=0 == frame-only per horizon.
+        lam = float(credit[3:]) if len(credit) > 3 else 1.0
+        return gae_frame_advantages(reward_frame, gamma, lam), True
     raise ValueError(f"unknown credit assignment {credit!r}")
 
 
@@ -100,50 +118,136 @@ def _policy_loss(logp: torch.Tensor, advantage: np.ndarray, blockwise: bool, dev
     return -(advantage_t[:, None, None] * logp).mean()
 
 
+def _load_catr_coefficients(path: str | Path, horizon: int) -> tuple[np.ndarray, str]:
+    if not path:
+        raise ValueError("reward=catr requires --catr_config")
+    raw = Path(path).read_bytes()
+    payload = json.loads(raw)
+    if int(payload["horizon"]) != int(horizon):
+        raise ValueError("CATR calibration horizon does not match training horizon")
+    coefficients = np.asarray(payload["coefficients"], dtype=np.float64)
+    if coefficients.shape != (horizon,):
+        raise ValueError("CATR calibration must provide one coefficient per horizon")
+    if np.any(coefficients < 0.0) or np.any(coefficients > 1.0):
+        raise ValueError("CATR coefficients must lie in [0,1]")
+    return coefficients, hashlib.sha256(raw).hexdigest()
+
+
+def _load_uatr_coefficients(path: str | Path, horizon: int) -> tuple[np.ndarray, str]:
+    if not path:
+        raise ValueError("reward=uatr/uatr_shuffled requires --adaptive_config")
+    raw = Path(path).read_bytes()
+    payload = json.loads(raw)
+    if int(payload["horizon"]) != int(horizon):
+        raise ValueError("UATR calibration horizon does not match training horizon")
+    if payload.get("verdict") != "PROVISIONAL-GREEN":
+        raise ValueError("UATR training is forbidden unless calibration Gate A is green")
+    coefficients = np.asarray(payload["coefficients"], dtype=np.float64)
+    if coefficients.shape != (horizon,):
+        raise ValueError("UATR calibration must provide one coefficient per horizon")
+    if not np.all(np.isfinite(coefficients)):
+        raise ValueError("UATR coefficients must be finite")
+    if np.any(coefficients < 0.0) or np.any(coefficients > 1.0):
+        raise ValueError("UATR coefficients must lie in [0,1]")
+    if np.count_nonzero(coefficients > 0.0) < 2:
+        raise ValueError("UATR calibration must activate at least two frame blocks")
+    return coefficients, hashlib.sha256(raw).hexdigest()
+
+
+def _aggregate(values: list[float], episodes: list[str], mode: str) -> float:
+    array = np.asarray(values, dtype=np.float64)
+    episode_array = np.asarray(episodes).astype(str)
+    if array.ndim != 1 or episode_array.shape != array.shape or not len(array):
+        raise ValueError("evaluation values and episodes must be aligned non-empty vectors")
+    if mode == "window_micro":
+        return float(array.mean())
+    if mode != "episode_macro":
+        raise ValueError(f"unknown evaluation aggregation {mode!r}")
+    return float(np.mean([
+        array[episode_array == episode].mean()
+        for episode in np.unique(episode_array)
+    ]))
+
+
 @torch.inference_mode()
-def evaluate(model, tokenizer, metrics, entries, *, horizon: int, group_size: int, device, seed: int) -> dict:
+def evaluate(
+    model,
+    tokenizer,
+    metrics,
+    entries,
+    *,
+    horizon: int,
+    group_size: int,
+    device,
+    seed: int,
+    action_dim: int = 4,
+    draws: int = 1,
+    aggregation: str = "window_micro",
+) -> dict:
+    if draws < 1:
+        raise ValueError("evaluation draws must be positive")
     rows = {"lpips": [], "mse": [], "psnr": [], "ssim": []}
     last_rows = {"lpips": [], "mse": []}
     token_rows = {"token_hamming": [], "latent_rms": []}
     token_last_rows = {"token_hamming": [], "latent_rms": []}
+    row_episodes, last_episodes = [], []
+    token_episodes, token_last_episodes = [], []
     model.eval()
-    for index, entry in enumerate(entries):
-        window = load_vp2_window_npz(entry["window_npz"], device=device)
-        ground_truth = tokenize_ground_truth(tokenizer, window)
-        rollout = sample_rollout(
-            tokenizer, model, ground_truth, window.actions,
-            horizon=horizon, group_size=group_size, seed=seed + index,
-        )
-        target_dynamics = future_dynamics_tokens(ground_truth, horizon)[0]
-        token_hamming = (
-            rollout.dynamics_tokens != target_dynamics.unsqueeze(0)
-        ).float().mean(dim=-1).detach().cpu().numpy()
-        latent_rms = -future_dynamics_latent_reward(
-            tokenizer,
-            rollout.dynamics_tokens,
-            target_dynamics,
-            projected=True,
-        ).detach().cpu().numpy()
-        for frame in range(horizon):
-            token_rows["token_hamming"].append(float(np.mean(token_hamming[:, frame])))
-            token_rows["latent_rms"].append(float(np.mean(latent_rms[:, frame])))
-            if frame == horizon - 1:
-                token_last_rows["token_hamming"].append(float(np.mean(token_hamming[:, frame])))
-                token_last_rows["latent_rms"].append(float(np.mean(latent_rms[:, frame])))
-        prediction = rollout.decoded[:, 2:]
-        for frame in range(horizon):
-            quality = metrics.eval_batch(prediction[:, frame], window.frames[2 + frame])
-            for name in rows:
-                score = float(np.mean(quality[name]))
-                rows[name].append(score)
-                if frame == horizon - 1 and name in last_rows:
-                    last_rows[name].append(score)
-    values = {name: float(np.mean(value)) for name, value in rows.items()}
-    values["lpips_last"] = float(np.mean(last_rows["lpips"]))
-    values["mse_last"] = float(np.mean(last_rows["mse"]))
-    values.update({name: float(np.mean(value)) for name, value in token_rows.items()})
-    values["token_hamming_last"] = float(np.mean(token_last_rows["token_hamming"]))
-    values["latent_rms_last"] = float(np.mean(token_last_rows["latent_rms"]))
+    for draw in range(draws):
+        for index, entry in enumerate(entries):
+            episode = str(entry["episode"])
+            window = load_vp2_window_npz(entry["window_npz"], action_dim=action_dim, device=device)
+            ground_truth = tokenize_ground_truth(tokenizer, window)
+            rollout = sample_rollout(
+                tokenizer, model, ground_truth, window.actions,
+                horizon=horizon, group_size=group_size,
+                seed=seed + draw * 1_000_003 + index,
+            )
+            target_dynamics = future_dynamics_tokens(ground_truth, horizon)[0]
+            token_hamming = (
+                rollout.dynamics_tokens != target_dynamics.unsqueeze(0)
+            ).float().mean(dim=-1).detach().cpu().numpy()
+            latent_rms = -future_dynamics_latent_reward(
+                tokenizer,
+                rollout.dynamics_tokens,
+                target_dynamics,
+                projected=True,
+            ).detach().cpu().numpy()
+            for frame in range(horizon):
+                token_rows["token_hamming"].append(float(np.mean(token_hamming[:, frame])))
+                token_rows["latent_rms"].append(float(np.mean(latent_rms[:, frame])))
+                token_episodes.append(episode)
+                if frame == horizon - 1:
+                    token_last_rows["token_hamming"].append(float(np.mean(token_hamming[:, frame])))
+                    token_last_rows["latent_rms"].append(float(np.mean(latent_rms[:, frame])))
+                    token_last_episodes.append(episode)
+            prediction = rollout.decoded[:, 2:]
+            for frame in range(horizon):
+                quality = metrics.eval_batch(prediction[:, frame], window.frames[2 + frame])
+                row_episodes.append(episode)
+                for name in rows:
+                    score = float(np.mean(quality[name]))
+                    rows[name].append(score)
+                    if frame == horizon - 1 and name in last_rows:
+                        last_rows[name].append(score)
+                if frame == horizon - 1:
+                    last_episodes.append(episode)
+    values = {
+        name: _aggregate(value, row_episodes, aggregation)
+        for name, value in rows.items()
+    }
+    values["lpips_last"] = _aggregate(last_rows["lpips"], last_episodes, aggregation)
+    values["mse_last"] = _aggregate(last_rows["mse"], last_episodes, aggregation)
+    values.update({
+        name: _aggregate(value, token_episodes, aggregation)
+        for name, value in token_rows.items()
+    })
+    values["token_hamming_last"] = _aggregate(
+        token_last_rows["token_hamming"], token_last_episodes, aggregation
+    )
+    values["latent_rms_last"] = _aggregate(
+        token_last_rows["latent_rms"], token_last_episodes, aggregation
+    )
     return values
 
 
@@ -171,8 +275,18 @@ def train_one(reward: str, credit: str, seed: int, args) -> dict:
     schedule, schedule_sha256 = _fixed_context_schedule(
         len(train_entries), args.steps, args.batch_windows, args.data_seed
     )
-    tokenizer, policy = load_ivideogpt(args.upstream, args.checkpoint, horizon=args.horizon, device=device)
-    _, reference = load_ivideogpt(args.upstream, args.checkpoint, horizon=args.horizon, device=device)
+    catr_coefficients, catr_sha256 = (None, None)
+    if reward == "catr":
+        catr_coefficients, catr_sha256 = _load_catr_coefficients(
+            args.catr_config, args.horizon
+        )
+    uatr_coefficients, uatr_sha256 = (None, None)
+    if reward in UATR_REWARDS:
+        uatr_coefficients, uatr_sha256 = _load_uatr_coefficients(
+            args.adaptive_config, args.horizon
+        )
+    tokenizer, policy = load_ivideogpt(args.upstream, args.checkpoint, horizon=args.horizon, action_dim=args.action_dim, device=device)
+    _, reference = load_ivideogpt(args.upstream, args.checkpoint, horizon=args.horizon, action_dim=args.action_dim, device=device)
     reference.eval()
     for parameter in reference.parameters():
         parameter.requires_grad_(False)
@@ -182,25 +296,51 @@ def train_one(reward: str, credit: str, seed: int, args) -> dict:
     log = {"step": [], "reward_mean": []}
     log["protocol"] = {
         "data_seed": int(args.data_seed),
+        "train_manifest_sha256": _file_sha256(args.train_manifest),
+        "eval_manifest_sha256": _file_sha256(args.eval_manifest),
         "context_schedule_sha256": schedule_sha256,
         "context_schedule_indices": schedule.tolist(),
         "candidate_seed_varies_by": "policy_seed,step,context_index,batch_ordinal",
         "policy_mode": "eval for both sampling and teacher-forced log-prob; gradients remain enabled",
         "train_episodes": sorted({str(entry["episode"]) for entry in train_entries}),
         "eval_episodes": sorted({str(entry["episode"]) for entry in eval_entries}),
+        "eval_draws": int(args.eval_draws),
+        "eval_aggregation": args.eval_aggregation,
+        "eval_initial": not bool(args.skip_initial_eval),
     }
+    if reward == "catr":
+        log["protocol"]["catr_config"] = str(Path(args.catr_config).resolve())
+        log["protocol"]["catr_config_sha256"] = catr_sha256
+        log["protocol"]["catr_coefficients"] = catr_coefficients.tolist()
+        log["protocol"]["catr_invariant"] = (
+            "token-weighted block advantage equals sequence-raw advantage"
+        )
+    if reward in UATR_REWARDS:
+        log["protocol"]["adaptive_config"] = str(Path(args.adaptive_config).resolve())
+        log["protocol"]["adaptive_config_sha256"] = uatr_sha256
+        log["protocol"]["adaptive_coefficients"] = uatr_coefficients.tolist()
+        log["protocol"]["adaptive_control"] = (
+            "candidate identity shuffled within each horizon"
+            if reward in {"uatr_shuffled", "uatr2_shuffled"}
+            else "aligned candidate identity"
+        )
     for name in (
         "lpips", "lpips_last", "mse", "mse_last", "psnr", "ssim",
         "token_hamming", "token_hamming_last", "latent_rms", "latent_rms_last",
     ):
         log[f"eval_{name}"] = []
     policy.eval()
-    _log_eval(
-        log, 0,
-        evaluate(policy, tokenizer, metrics, eval_entries, horizon=args.horizon,
-                 group_size=args.eval_K, device=device, seed=args.eval_seed),
-        reward, credit, 0.0,
-    )
+    if not args.skip_initial_eval:
+        _log_eval(
+            log, 0,
+            evaluate(
+                policy, tokenizer, metrics, eval_entries,
+                horizon=args.horizon, group_size=args.eval_K, device=device,
+                seed=args.eval_seed, action_dim=args.action_dim, draws=args.eval_draws,
+                aggregation=args.eval_aggregation,
+            ),
+            reward, credit, 0.0,
+        )
     # Keep the exact same deterministic policy mode for generation and
     # teacher-forced log-probability evaluation.  Gradients remain enabled in
     # eval mode; switching to train mode here would make checkpoints with
@@ -216,14 +356,19 @@ def train_one(reward: str, credit: str, seed: int, args) -> dict:
     if reward == "rctr":
         log["train_rctr_coverage"] = []
         log["train_rctr_score_std"] = []
-    if reward == "ra_rc":
+    if reward == "catr":
+        log["train_catr_residual_rms"] = []
+        log["train_catr_conservation_error"] = []
+    if reward in ANCHORED_REWARDS:
         for name in (
-            "train_raw_policy_loss", "train_rc_policy_loss",
+            "train_raw_policy_loss", "train_preferred_policy_loss",
             "train_constraint_active", "train_projection_coefficient",
             "train_gradient_cosine", "train_preferred_progress_ratio",
             "train_projected_progress_ratio",
         ):
             log[name] = []
+        if reward == "ra_rc":
+            log["train_rc_policy_loss"] = []
     for step in range(1, args.steps + 1):
         selected = schedule[step - 1]
         optimizer.zero_grad(set_to_none=True)
@@ -236,9 +381,11 @@ def train_one(reward: str, credit: str, seed: int, args) -> dict:
         projection_rows = []
         rctr_coverage_rows = []
         rctr_score_std_rows = []
+        catr_residual_rows = []
+        catr_conservation_rows = []
         for ordinal, selected_index in enumerate(selected):
             entry = train_entries[int(selected_index)]
-            window = load_vp2_window_npz(entry["window_npz"], device=device)
+            window = load_vp2_window_npz(entry["window_npz"], action_dim=args.action_dim, device=device)
             with torch.inference_mode():
                 ground_truth = tokenize_ground_truth(tokenizer, window)
                 reachable = decoded_ground_truth(tokenizer, ground_truth)
@@ -257,12 +404,36 @@ def train_one(reward: str, credit: str, seed: int, args) -> dict:
                     raw_advantage, raw_blockwise = _advantages(
                         frame_values["raw"], credit, args.gamma
                     )
-                    rc_advantage, rc_blockwise = _advantages(
+                    preferred_advantage, preferred_blockwise = _advantages(
                         frame_values["rc"], credit, args.gamma
                     )
-                    if raw_blockwise != rc_blockwise:
+                    if raw_blockwise != preferred_blockwise:
                         raise RuntimeError("raw/RC credit modes diverged")
                     reward_frame = frame_values["rc"]
+                elif reward in UATR_REWARDS:
+                    raw_advantage, raw_blockwise = _advantages(
+                        frame_values["raw"], "seq", args.gamma
+                    )
+                    shuffle_seed = None
+                    if reward in {"uatr_shuffled", "uatr2_shuffled"}:
+                        shuffle_seed = (
+                            seed * 1_000_003
+                            + step * 10_007
+                            + int(selected_index) * 101
+                            + ordinal
+                            + 97_409
+                        )
+                    advantage_builder = (
+                        influence_adaptive_delayed_advantages
+                        if reward in {"uatr2", "uatr2_shuffled"}
+                        else influence_adaptive_temporal_advantages
+                    )
+                    preferred_advantage = advantage_builder(
+                        frame_values["raw"], frame_values["rc"], args.gamma,
+                        uatr_coefficients, shuffle_seed=shuffle_seed,
+                    )
+                    preferred_blockwise = True
+                    reward_frame = frame_values["raw"]
                 elif reward == "rctr":
                     score, coverage = reachability_consistent_temporal_scores(
                         frame_values["raw"], frame_values["rc"], args.gamma
@@ -272,6 +443,24 @@ def train_one(reward: str, credit: str, seed: int, args) -> dict:
                     reward_frame = frame_values["raw"]
                     rctr_coverage_rows.append(float(np.mean(coverage)))
                     rctr_score_std_rows.append(float(np.mean(np.std(score, axis=0))))
+                elif reward == "catr":
+                    advantage = conservative_adaptive_temporal_advantages(
+                        frame_values["raw"], frame_values["rc"], args.gamma,
+                        catr_coefficients,
+                        token_counts=np.full(args.horizon, DYNAMICS_GRID_TOKENS),
+                    )
+                    blockwise = True
+                    reward_frame = frame_values["raw"]
+                    raw_scalar = reward_frame.mean(axis=1)
+                    raw_anchor = (raw_scalar - raw_scalar.mean()) / (
+                        raw_scalar.std() + 1e-6
+                    )
+                    catr_residual_rows.append(float(np.sqrt(np.mean(
+                        (advantage - raw_anchor[:, None]) ** 2
+                    ))))
+                    catr_conservation_rows.append(float(np.max(np.abs(
+                        advantage.mean(axis=1) - raw_anchor
+                    ))))
                 else:
                     reward_frame = _select_reward(frame_values, reward, args.rc_mix)
                     advantage, blockwise = _advantages(reward_frame, credit, args.gamma)
@@ -279,24 +468,24 @@ def train_one(reward: str, credit: str, seed: int, args) -> dict:
             with torch.no_grad():
                 reference_logp = teacher_forced_dynamics_logp(reference, rollout, window.actions)
             kl = sampled_kl_penalty(logp, reference_logp, args.kl_type).mean()
-            if reward == "ra_rc":
+            if reward in ANCHORED_REWARDS:
                 raw_policy_loss = _policy_loss(
                     logp, raw_advantage, raw_blockwise, device
                 )
-                rc_policy_loss = _policy_loss(
-                    logp, rc_advantage, rc_blockwise, device
+                preferred_policy_loss = _policy_loss(
+                    logp, preferred_advantage, preferred_blockwise, device
                 )
                 raw_gradients = torch.autograd.grad(
                     raw_policy_loss, parameters, retain_graph=True, allow_unused=True
                 )
-                rc_gradients = torch.autograd.grad(
-                    rc_policy_loss,
+                preferred_gradients = torch.autograd.grad(
+                    preferred_policy_loss,
                     parameters,
                     retain_graph=bool(args.kl > 0.0),
                     allow_unused=True,
                 )
                 projected, projection = project_to_primary_progress(
-                    raw_gradients, rc_gradients
+                    raw_gradients, preferred_gradients
                 )
                 accumulate_parameter_gradients(
                     parameters, projected, scale=1.0 / args.batch_windows
@@ -304,9 +493,9 @@ def train_one(reward: str, credit: str, seed: int, args) -> dict:
                 if args.kl > 0.0:
                     (args.kl * kl / args.batch_windows).backward()
                 raw_policy_value += float(raw_policy_loss.detach().cpu())
-                rc_policy_value += float(rc_policy_loss.detach().cpu())
-                policy_value += float(rc_policy_loss.detach().cpu())
-                loss_value += float((rc_policy_loss + args.kl * kl).detach().cpu())
+                rc_policy_value += float(preferred_policy_loss.detach().cpu())
+                policy_value += float(preferred_policy_loss.detach().cpu())
+                loss_value += float((preferred_policy_loss + args.kl * kl).detach().cpu())
                 projection_rows.append(projection)
             else:
                 policy_loss = _policy_loss(logp, advantage, blockwise, device)
@@ -324,9 +513,14 @@ def train_one(reward: str, credit: str, seed: int, args) -> dict:
         if reward == "rctr":
             log["train_rctr_coverage"].append(float(np.mean(rctr_coverage_rows)))
             log["train_rctr_score_std"].append(float(np.mean(rctr_score_std_rows)))
-        if reward == "ra_rc":
+        if reward == "catr":
+            log["train_catr_residual_rms"].append(float(np.mean(catr_residual_rows)))
+            log["train_catr_conservation_error"].append(float(np.max(catr_conservation_rows)))
+        if reward in ANCHORED_REWARDS:
             log["train_raw_policy_loss"].append(raw_policy_value / args.batch_windows)
-            log["train_rc_policy_loss"].append(rc_policy_value / args.batch_windows)
+            log["train_preferred_policy_loss"].append(rc_policy_value / args.batch_windows)
+            if reward == "ra_rc":
+                log["train_rc_policy_loss"].append(rc_policy_value / args.batch_windows)
             log["train_constraint_active"].append(float(np.mean([
                 row["constraint_active"] for row in projection_rows
             ])))
@@ -349,12 +543,17 @@ def train_one(reward: str, credit: str, seed: int, args) -> dict:
                 f" active={np.mean([row['constraint_active'] for row in projection_rows]):.2f} "
                 f"cos={np.mean([row['gradient_cosine'] for row in projection_rows]):+.3f} "
                 f"rawProg={np.mean([row['projected_progress_ratio'] for row in projection_rows]):.3f}"
-                if reward == "ra_rc" else ""
+                if reward in ANCHORED_REWARDS else ""
             )
             + (
                 f" coverage={np.mean(rctr_coverage_rows):.3f} "
                 f"rankStd={np.mean(rctr_score_std_rows):.3f}"
                 if reward == "rctr" else ""
+            )
+            + (
+                f" residRMS={np.mean(catr_residual_rows):.3f} "
+                f"consErr={np.max(catr_conservation_rows):.2e}"
+                if reward == "catr" else ""
             ),
             flush=True,
         )
@@ -363,6 +562,8 @@ def train_one(reward: str, credit: str, seed: int, args) -> dict:
             result = evaluate(
                 policy, tokenizer, metrics, eval_entries, horizon=args.horizon,
                 group_size=args.eval_K, device=device, seed=args.eval_seed,
+                action_dim=args.action_dim, draws=args.eval_draws,
+                aggregation=args.eval_aggregation,
             )
             _log_eval(log, step, result, reward, credit, float(np.mean(reward_values)))
             policy.eval()
@@ -390,10 +591,33 @@ def parse_args():
         help="RC fraction for reward=rc_mix; selected on calibration candidates",
     )
     parser.add_argument("--credits", default="seq,return")
+    parser.add_argument(
+        "--catr_config",
+        default="",
+        help="frozen delayed-influence JSON required by reward=catr",
+    )
+    parser.add_argument(
+        "--adaptive_config",
+        default="",
+        help="frozen delayed-influence JSON required by reward=uatr/uatr_shuffled",
+    )
     parser.add_argument("--seeds", default="0")
     parser.add_argument("--horizon", type=int, default=8)
+    parser.add_argument("--action_dim", type=int, default=4,
+                        help="4 for RoboSuite PushCenter, 5 for RoboDesk")
     parser.add_argument("--K", type=int, default=16)
     parser.add_argument("--eval_K", type=int, default=4)
+    parser.add_argument("--eval_draws", type=int, default=1)
+    parser.add_argument(
+        "--eval_aggregation",
+        choices=("window_micro", "episode_macro"),
+        default="window_micro",
+    )
+    parser.add_argument(
+        "--skip_initial_eval",
+        action="store_true",
+        help="avoid repeated base evaluation; pilot decisions still use the fixed final step",
+    )
     parser.add_argument("--steps", type=int, default=30)
     parser.add_argument("--batch_windows", type=int, default=2)
     parser.add_argument("--lr", type=float, default=1e-5)
@@ -414,17 +638,26 @@ def parse_args():
 
 def main():
     args = parse_args()
-    if args.K < 2 or args.eval_K < 1 or args.steps < 1 or args.batch_windows < 1:
-        raise ValueError("K, eval_K, steps, and batch_windows must be positive (K >= 2)")
+    if args.K < 2 or args.eval_K < 1 or args.eval_draws < 1 or args.steps < 1 or args.batch_windows < 1:
+        raise ValueError("K, eval_K, eval_draws, steps, and batch_windows must be positive (K >= 2)")
     rewards = [item.strip() for item in args.rewards.split(",") if item.strip()]
     credits = [item.strip() for item in args.credits.split(",") if item.strip()]
     seeds = [int(item) for item in args.seeds.split(",") if item.strip()]
     if not 0.0 <= args.rc_mix <= 1.0:
         raise ValueError("rc_mix must lie in [0,1]")
-    if sorted(set(rewards) - {"raw", "rc", "rc_mix", "ra_rc", "rctr"}) or sorted(set(credits) - {"seq", "return", "return_eq"}):
-        raise ValueError("rewards must be raw,rc,rc_mix,ra_rc,rctr and credits must be seq,return,return_eq")
+    unknown_credits = {c for c in credits
+                       if c not in {"seq", "return", "return_eq", "adaptive"}
+                       and not c.startswith("gae")}
+    if sorted(set(rewards) - {"raw", "rc", "rc_mix", "ra_rc", "rctr", "catr", *UATR_REWARDS}) or unknown_credits:
+        raise ValueError("unknown reward or credit assignment")
     if "rctr" in rewards and set(credits) != {"return"}:
         raise ValueError("rctr is defined only for credits=return")
+    if "catr" in rewards and set(credits) != {"adaptive"}:
+        raise ValueError("catr is defined only for credits=adaptive")
+    if set(rewards) & UATR_REWARDS and set(credits) != {"adaptive"}:
+        raise ValueError("uatr and uatr_shuffled are defined only for credits=adaptive")
+    if set(credits) == {"adaptive"} and not set(rewards) <= ({"catr"} | UATR_REWARDS):
+        raise ValueError("credits=adaptive is only valid for catr/uatr rewards")
     if args.kl_type != "low_var_kl":
         raise ValueError("P2 is preregistered with the RLVR-compatible low_var_kl estimator")
     Path(args.out_dir).mkdir(parents=True, exist_ok=True)

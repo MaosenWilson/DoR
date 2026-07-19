@@ -37,7 +37,7 @@ from dor.models import load_action_ranges
 from dor.multistep import (detok_chunked, discretize_actions, load_msp, msp_rewards_frame,
                            msp_rollout, msp_sample_windows, msp_token_logp, msp_window,
                            V_MSP)
-from dor.temporal_credit import temporal_return_advantages
+from dor.temporal_credit import gae_frame_advantages, temporal_return_advantages
 
 
 @torch.no_grad()
@@ -91,6 +91,7 @@ def _temporal_advantages(
     gain_alpha=0.0,
     return_horizon=0,
     control_seed=0,
+    gae_lambda=1.0,
 ):
     """Build sequence or frame-block advantages from per-frame rewards.
 
@@ -126,6 +127,11 @@ def _temporal_advantages(
     if mode == "gain_return":
         shaped = _gain_shaped_rewards(r, gain_alpha)
         adv = temporal_return_advantages(shaped, beta, max_terms=return_horizon)
+        return None, adv, float(scalar.mean())
+
+    if mode == "gae":
+        # Critic-free GAE frame-block advantage; lam=1==return, lam=0==frame.
+        adv = gae_frame_advantages(r, beta, gae_lambda)
         return None, adv, float(scalar.mean())
 
     raise ValueError(f"unknown adv_temporal={mode!r}")
@@ -224,11 +230,13 @@ def train_one(reward, seed, args, dev="cuda"):
                         raw_frame, args.adv_temporal, args.temporal_gamma,
                         args.gain_alpha, return_horizon=args.return_horizon,
                         control_seed=seed * 1_000_000 + step * 1000 + int(bi),
+                        gae_lambda=args.gae_lambda,
                     )
                     rc_adv, rc_adv_frame, r_mean = _temporal_advantages(
                         rc_frame, args.adv_temporal, args.temporal_gamma,
                         args.gain_alpha, return_horizon=args.return_horizon,
                         control_seed=seed * 1_000_000 + step * 1000 + int(bi),
+                        gae_lambda=args.gae_lambda,
                     )
                 else:
                     target_f = (
@@ -242,6 +250,7 @@ def train_one(reward, seed, args, dev="cuda"):
                         r_frame, args.adv_temporal, args.temporal_gamma,
                         args.gain_alpha, return_horizon=args.return_horizon,
                         control_seed=seed * 1_000_000 + step * 1000 + int(bi),
+                        gae_lambda=args.gae_lambda,
                     )
             model.config.use_cache = False
             tok_logp = msp_token_logp(model, ctx_off, act_off, dyn)
@@ -301,16 +310,16 @@ def train_one(reward, seed, args, dev="cuda"):
                 log[log_name].append(float(np.mean([row[key] for row in projection_rows])))
         if step % args.eval_every == 0 or step == args.steps:
             _log_eval(step, r_acc / max(nseq, 1))
-            el = time.time() - t0
-            print(f"[{reward}/msp] {_bar(step / args.steps)} {step}/{args.steps} "
-                  f"elapsed={_hms(el)} eta={_hms(el / step * (args.steps - step))} "
-                  f"r={r_acc / max(nseq, 1):.4f}"
-                  + (
-                      f" active={np.mean([row['constraint_active'] for row in projection_rows]):.2f} "
-                      f"cos={np.mean([row['gradient_cosine'] for row in projection_rows]):+.3f} "
-                      f"rawProg={np.mean([row['projected_progress_ratio'] for row in projection_rows]):.3f}"
-                      if reward == "ra_rc" else ""
-                  ), flush=True)
+        el = time.time() - t0
+        print(f"[{reward}/msp] {_bar(step / args.steps)} {step}/{args.steps} "
+              f"elapsed={_hms(el)} eta={_hms(el / step * (args.steps - step))} "
+              f"r={r_acc / max(nseq, 1):.4f}"
+              + (
+                  f" active={np.mean([row['constraint_active'] for row in projection_rows]):.2f} "
+                  f"cos={np.mean([row['gradient_cosine'] for row in projection_rows]):+.3f} "
+                  f"rawProg={np.mean([row['projected_progress_ratio'] for row in projection_rows]):.3f}"
+                  if reward == "ra_rc" else ""
+              ), flush=True)
 
     ckpt = os.path.join(args.out_dir, "ckpt", f"{reward}_msp_s{seed}")
     os.makedirs(ckpt, exist_ok=True)
@@ -342,12 +351,14 @@ def main():
                     help="sampled KL estimator; low_var_kl matches RLVR-World/VERL, "
                          "while linear only reproduces earlier exploratory runs")
     ap.add_argument("--adv_temporal", default="seq",
-                    choices=["seq", "frame", "return", "shuffled_return", "gain_return"],
+                    choices=["seq", "frame", "return", "shuffled_return", "gain_return", "gae"],
                     help="multi-step advantage granularity: old rollout scalar, per-frame, "
                          "discounted temporal return, candidate-shuffled control, or "
                          "gain-shaped temporal return")
     ap.add_argument("--temporal_gamma", type=float, default=0.95,
                     help="discount beta for --adv_temporal return/gain_return")
+    ap.add_argument("--gae_lambda", type=float, default=1.0,
+                    help="GAE lambda for --adv_temporal gae (1=return, 0=frame)")
     ap.add_argument("--gain_alpha", type=float, default=0.5,
                     help="reward-improvement shaping strength for --adv_temporal gain_return")
     ap.add_argument("--return_horizon", type=int, default=0,

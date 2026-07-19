@@ -31,7 +31,7 @@ class VP2Window:
     episode: str
     start: int
     frames: torch.Tensor  # [C + H, 3, 64, 64], float in [0, 1]
-    actions: torch.Tensor  # [C + H, 4], float32
+    actions: torch.Tensor  # [C + H, action_dim], float32; final row is unused
 
     @property
     def horizon(self) -> int:
@@ -73,22 +73,30 @@ def load_vp2_window(
     horizon: int,
     *,
     image_key: str = "agentview_shift_2_image",
+    action_dim: int | None = 4,
     resolution: int = 64,
     device: torch.device | str = "cpu",
 ) -> VP2Window:
-    """Load one contiguous, action-aligned VP2 RoboSuite segment.
+    """Load one contiguous, action-aligned VP2 RoboSuite/RoboDesk segment.
 
     iVideoGPT predicts future frame ``t`` with action index ``t-1`` when the
     context length is two. Returning frames and actions with the same start offset
     preserves that upstream convention: context ``[s, s+1]`` and future frame
     ``s+2`` use ``actions[s+1]``.
+
+    ``image_key`` selects the observation stream (``agentview_shift_2_image`` for
+    RoboSuite PushCenter, ``camera_image`` for RoboDesk). ``action_dim`` validates
+    the action width (4 for RoboSuite, 5 for RoboDesk); pass ``None`` to accept
+    whatever the file stores. RoboDesk's ``camera_image`` is written under a
+    compression filter that fails on sliced reads, so the frame stream is read in
+    full and then sliced -- matching the upstream ``preprocess_vp2`` loader.
     """
     if horizon < 1:
         raise ValueError("horizon must be positive")
     import h5py
 
     length = CONTEXT_LENGTH + int(horizon)
-    with h5py.File(hdf5_path, "r") as handle:
+    with h5py.File(hdf5_path, "r", libver="latest") as handle:
         group_path = f"data/{episode}"
         if group_path not in handle:
             raise KeyError(f"episode {episode!r} not found")
@@ -101,13 +109,16 @@ def load_vp2_window(
             raise ValueError(
                 f"window [{start}, {start + length}) exceeds {episode!r} length {total}"
             )
-        images = np.asarray(group[image_path][start:start + length])
+        # Full read then slice: compressed camera_image can reject partial reads.
+        images = np.asarray(group[image_path][()])[start:start + length]
         actions = np.asarray(group["actions"][start:start + length])
 
     if images.ndim != 4 or images.shape[-1] != 3:
         raise ValueError(f"expected THWC RGB images, got {images.shape}")
-    if actions.ndim != 2 or actions.shape[1] != 4:
-        raise ValueError(f"expected four-dimensional actions, got {actions.shape}")
+    if actions.ndim != 2 or (action_dim is not None and actions.shape[1] != action_dim):
+        raise ValueError(
+            f"expected {action_dim}-dimensional actions, got {actions.shape}"
+        )
 
     frames = torch.from_numpy(images).permute(0, 3, 1, 2).float().div_(255.0)
     if tuple(frames.shape[-2:]) != (resolution, resolution):
@@ -129,6 +140,7 @@ def load_vp2_window(
 def load_vp2_window_npz(
     path: str | Path,
     *,
+    action_dim: int | None = 4,
     resolution: int = 64,
     device: torch.device | str = "cpu",
 ) -> VP2Window:
@@ -136,7 +148,8 @@ def load_vp2_window_npz(
 
     The released VP2 file needs HDF5 1.12.x for reliable scale-offset decoding on
     the current server. Exporting windows in that isolated reader makes the actual
-    model/reward environment independent of an HDF5 ABI detail.
+    model/reward environment independent of an HDF5 ABI detail. ``action_dim``
+    validates the action width (4 RoboSuite, 5 RoboDesk); ``None`` accepts any.
     """
     with np.load(path, allow_pickle=False) as payload:
         images = np.asarray(payload["image"])
@@ -145,7 +158,9 @@ def load_vp2_window_npz(
         start = int(payload["start"].item())
     if images.ndim != 4 or images.shape[-1] != 3:
         raise ValueError(f"expected THWC RGB images, got {images.shape}")
-    if actions.ndim != 2 or actions.shape != (images.shape[0], 4):
+    if actions.ndim != 2 or actions.shape[0] != images.shape[0] or (
+        action_dim is not None and actions.shape[1] != action_dim
+    ):
         raise ValueError(f"actions {actions.shape} do not match images {images.shape}")
     frames = torch.from_numpy(images).permute(0, 3, 1, 2).float().div_(255.0)
     if tuple(frames.shape[-2:]) != (resolution, resolution):
@@ -169,11 +184,14 @@ def load_ivideogpt(
     checkpoint_dir: str | Path,
     *,
     horizon: int,
+    action_dim: int = 4,
     device: torch.device | str = "cuda",
 ):
-    """Load the public VP2-RoboSuite checkpoint without modifying upstream files."""
+    """Load a public two-context-frame action-conditioned iVideoGPT checkpoint."""
     if horizon < 1:
         raise ValueError("horizon must be positive")
+    if action_dim < 1:
+        raise ValueError("action_dim must be positive")
     _import_upstream(upstream_root)
     from safetensors.torch import load_file
     from transformers import AutoConfig, AutoModelForCausalLM
@@ -197,7 +215,7 @@ def load_ivideogpt(
     llm = AutoModelForCausalLM.from_config(config)
     model = HeadModelWithAction(
         llm,
-        action_dim=4,
+        action_dim=int(action_dim),
         prelude_tokens_num=CONTEXT_LENGTH * CONTEXT_BLOCK_TOKENS - 1,
         tokens_num_per_dyna=DYNAMICS_GRID_TOKENS,
         context=CONTEXT_LENGTH,
@@ -337,6 +355,113 @@ def sample_rollout(
     )
 
 
+def prefix_tokens_through_frame(full_tokens: torch.Tensor, prefix_frames: int) -> torch.Tensor:
+    """Return a generated prefix ending with the next frame's SDF separator.
+
+    ``prefix_frames`` complete future blocks are retained.  The returned token
+    stream also contains the following SDF marker, which is the exact position
+    from which the public action-conditioned generator predicts the next block.
+    """
+    if full_tokens.ndim != 2:
+        raise ValueError(f"expected [batch,tokens], got {tuple(full_tokens.shape)}")
+    horizon = (full_tokens.shape[1] - _future_block_start()) // FUTURE_BLOCK_TOKENS
+    if full_tokens.shape[1] != _future_block_start() + horizon * FUTURE_BLOCK_TOKENS:
+        raise ValueError("full token sequence is not composed of complete future blocks")
+    if prefix_frames < 1 or prefix_frames >= horizon:
+        raise ValueError("prefix_frames must retain at least one but not all future frames")
+    stop = _future_block_start() + prefix_frames * FUTURE_BLOCK_TOKENS + 1
+    return full_tokens[:, :stop].clone()
+
+
+@torch.no_grad()
+def sample_continuations_from_prefixes(
+    tokenizer,
+    model,
+    prefix_tokens: torch.Tensor,
+    actions: torch.Tensor,
+    *,
+    prefix_frames: int,
+    horizon: int,
+    continuations: int,
+    seed: int,
+    temperature: float = 1.0,
+    top_k: int = 100,
+) -> VP2Rollout:
+    """Branch independent continuations from fixed generated frame prefixes.
+
+    This reproduces ``HeadModelWithAction.generate`` frame by frame.  Rebuilding
+    embeddings for a prefix requires restoring action additions at every existing
+    SDF separator; omitting those additions would silently turn the branch audit
+    into a differently conditioned model.
+    """
+    if prefix_tokens.ndim != 2:
+        raise ValueError(f"expected [prefix,tokens], got {tuple(prefix_tokens.shape)}")
+    if prefix_frames < 1 or prefix_frames >= horizon:
+        raise ValueError("prefix_frames must lie in [1,horizon-1]")
+    if continuations < 2:
+        raise ValueError("at least two continuations are required")
+    if actions.ndim != 2 or actions.shape[0] < CONTEXT_LENGTH + horizon:
+        raise ValueError("actions must include context and all future action slots")
+    expected_prefix = _future_block_start() + prefix_frames * FUTURE_BLOCK_TOKENS + 1
+    if prefix_tokens.shape[1] != expected_prefix:
+        raise ValueError(
+            f"prefix length {prefix_tokens.shape[1]} does not match "
+            f"prefix_frames={prefix_frames} (expected {expected_prefix})"
+        )
+    if not hasattr(model, "llm") or not hasattr(model, "action_linear"):
+        raise TypeError("model does not expose the public iVideoGPT action interface")
+
+    torch.manual_seed(int(seed))
+    tokens = prefix_tokens.repeat_interleave(int(continuations), dim=0).clone()
+    batch = tokens.shape[0]
+    action = actions.unsqueeze(0).expand(batch, -1, -1).contiguous()
+    action_embeds = model.action_linear(action)
+    inputs_embeds = model.get_input_embeddings(tokens)
+
+    # Restore action conditioning for all separators already represented in the
+    # fixed prefix, including the separator for the first resampled frame.
+    for frame in range(prefix_frames + 1):
+        position = model.prelude_tokens_num + frame * (model.tokens_num_per_dyna + 1)
+        inputs_embeds[:, position, :] += action_embeds[:, frame + model.context - 1, :]
+
+    sdf = int(model.token_for_sdf)
+    for frame in range(prefix_frames, horizon):
+        predicted = model.llm.generate(
+            inputs_embeds=inputs_embeds,
+            do_sample=True,
+            temperature=float(temperature),
+            pad_token_id=50256,
+            top_k=int(top_k),
+            use_cache=True,
+            max_new_tokens=DYNAMICS_GRID_TOKENS,
+            return_dict_in_generate=False,
+        )
+        separator = torch.full(
+            (batch, 1), sdf, device=tokens.device, dtype=predicted.dtype
+        )
+        tokens = torch.cat([tokens, predicted, separator], dim=1)
+        new_embeds = model.get_input_embeddings(torch.cat([predicted, separator], dim=1))
+        inputs_embeds = torch.cat([inputs_embeds, new_embeds], dim=1)
+        next_frame = frame + 1
+        if next_frame < horizon:
+            inputs_embeds[:, -1, :] += action_embeds[
+                :, next_frame + model.context - 1, :
+            ]
+
+    tokens = tokens[:, :-1]
+    expected = _future_block_start() + int(horizon) * FUTURE_BLOCK_TOKENS
+    if tokens.shape != (batch, expected):
+        raise RuntimeError(
+            f"unexpected branched token shape {tuple(tokens.shape)}, expected {(batch, expected)}"
+        )
+    decoded = tokenizer.detokenize(tokens, CONTEXT_LENGTH).clamp(0.0, 1.0)
+    return VP2Rollout(
+        full_tokens=tokens,
+        dynamics_tokens=future_dynamics_tokens(tokens, horizon),
+        decoded=decoded,
+    )
+
+
 def teacher_forced_dynamics_logp(model, rollout: VP2Rollout, actions: torch.Tensor) -> torch.Tensor:
     """Return sampled dynamics-token log-probabilities `[K, H, 16]` with gradients.
 
@@ -392,9 +517,20 @@ def frame_rewards(metrics, rollout: VP2Rollout, window: VP2Window, reachable: to
     return {"raw": np.stack(raw, axis=1), "rc": np.stack(rc, axis=1)}
 
 
-def windows_from_manifest(entries: Iterable[dict], hdf5_path: str | Path, horizon: int, *, device="cpu") -> list[VP2Window]:
+def windows_from_manifest(
+    entries: Iterable[dict],
+    hdf5_path: str | Path,
+    horizon: int,
+    *,
+    image_key: str = "agentview_shift_2_image",
+    action_dim: int | None = 4,
+    device="cpu",
+) -> list[VP2Window]:
     """Load a frozen manifest of `{"episode": ..., "start": ...}` entries."""
     return [
-        load_vp2_window(hdf5_path, str(entry["episode"]), int(entry["start"]), horizon, device=device)
+        load_vp2_window(
+            hdf5_path, str(entry["episode"]), int(entry["start"]), horizon,
+            image_key=image_key, action_dim=action_dim, device=device,
+        )
         for entry in entries
     ]

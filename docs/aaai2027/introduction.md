@@ -1,39 +1,59 @@
-# Introduction 中文正式工作稿
+# Introduction 中文工作稿
 
-## 段落任务
+## Paragraph Structure
 
-1. 世界模型后训练的意义，以及 RLVR 的吸引力；
-2. tokenized video verifier 的输出空间错位；
-3. multi-step GRPO 的时间信用错位；
-4. 统一视角与方法；
-5. 贡献与证据边界。
+1. 动作条件视频世界模型与可验证奖励后训练的价值；
+2. 冻结视觉 codec 引起的 target-set mismatch；
+3. multi-step sequence-level GRPO 的时间信用错位；
+4. RC-GRPO 的两部分方法；
+5. 两项贡献、证据与边界。
 
-## 正式中文稿
+## Draft
 
-世界模型需要根据当前视觉状态与动作预测未来状态，其价值取决于预测是否足以支持理解、规划和控制。自回归视频世界模型通常先把视频压缩为离散视觉 token，再以序列建模方式预测未来。最大似然训练优化 token likelihood，却不直接优化使用者关心的像素保真或感知质量。RLVR-World 因而提出用可自动计算的 MSE、LPIPS 等预测指标作为 verifiable rewards，并通过 group-relative policy optimization（GRPO）直接后训练世界模型。这一范式绕开人工偏好标注，为视频生成模型提供了简洁的任务对齐接口。
+动作条件视频世界模型通过预测动作作用下的未来视觉状态，为机器人规划、交互式仿真和基于模型
+的决策提供环境动态。许多视频世界模型先用视觉 tokenizer 将图像压缩为离散 token，再由自回归
+模型生成未来 token trajectory。最大似然训练优化 token likelihood，却不直接优化最终解码视频的
+像素或感知保真度。可验证奖励后训练因此从同一条件采样多条候选未来，以 MSE、LPIPS 等自动
+指标评分，并利用 group-relative policy optimization 直接提高组内较优候选的概率。这一范式无需
+人工偏好标注，但其可靠性取决于 verifier 给出的相对偏好是否适合驱动策略更新。
 
-然而，verifiable 并不意味着对策略学习可靠。Tokenized video model 不直接输出任意像素图像；其预测必须经过冻结 decoder，因此只能落在 decoder 的可达输出集合内。真实 future frame 通常不严格属于该集合。即使策略预测了 ground-truth visual tokens，decoder 仍会留下 tokenizer reconstruction residual。该残差中与候选无关的常数部分会被 GRPO 组内去均值消除，但候选预测误差与残差的交互项会改变 pairwise ordering。于是，一个数值完全可计算的 decoded reward 仍可能向 GRPO 提供错误的相对偏好。
+在 tokenized 视频模型中，可计算的 full-reference error 不必然产生可靠的 candidate ordering。
+模型的预测必须经过冻结 decoder，因此只能落在该 tokenizer-decoder 的可生成集合中，而 raw
+future frame 通常不能被该接口精确重建。raw target 与其 codec reconstruction 之间的 residual
+不仅产生一个候选共享的常数项，还会通过与 candidate error 的交互改变组内相对间隔甚至翻转
+candidate pairs。由于 GRPO 主要消费组内排序，这种 target-set mismatch 会直接进入策略梯度；
+简单减去常数重建残差并不能修复排序。
 
-多步 rollout 进一步引入时间信用错位。Sequence-level GRPO 将整段 future prediction 压缩成一个 reward，并把同一优势广播给所有 future tokens，无法区分早期 frame block 对后续误差传播的责任。简单地改成逐帧优势也不能解决这一问题，因为它只奖励当前帧并切断延迟影响。近期视觉生成中的 stepwise GRPO 工作同样表明，生成轨迹内部的不同步骤不应共享粗粒度 outcome credit；但 diffusion/flow denoising steps 与 action-conditioned autoregressive future frames 具有不同的因果语义，也没有处理冻结 video codec 引起的 verifier rank corruption。
+多步自回归生成进一步引入时间信用错位。Sequence-level GRPO 将整段未来预测聚合为一个 reward，
+并把同一优势广播给所有 future-frame visual-token blocks。然而，较早 frame block 会成为后续预测
+条件，较晚 block 不能反向影响已经生成的帧。统一 rollout scalar 无法表达这种定向依赖；另一种
+直观方案是为每帧只使用当前 reward，但它又切断了早期预测对未来误差的延迟影响。因此，视频
+后训练不仅需要可靠地比较同组 candidates，还需要把 future quality 分配给真正能够影响它的
+visual-token blocks。
 
-我们从 group-relative ranking reliability 统一处理这两个问题。首先，我们把 raw target 与其 tokenizer-reachable reconstruction 之间的失配操作化为 reconstruction-induced rank corruption，并用候选排序相关性预测 pairwise flip probability。基于该诊断，我们提出 reconstruction-calibrated（RC）verifier：将 ground truth 通过同一冻结 tokenizer-decoder 投影后再计算原有 MSE+LPIPS reward。其次，我们将 multi-step GRPO 的信用单位改为 future-frame token block，通过 temporal return 把后续预测质量分配给能够影响它的前序 block。进一步的候选扩展使用各 horizon 实测的 rank-flip probability 调制 temporal return；该扩展只有在离线重放与 paired training 通过后才进入正式方法。
+为同时处理两个错位，我们提出 RC-GRPO，并保持候选采样、冻结视觉 tokenizer、decoder、世界
+模型架构和最终 raw-frame evaluation 不变。在 verifier 一侧，可达性审计在同一 candidate group
+上量化 raw target 与 codec-reachable target 造成的 rank disagreement；RC verifier 随后保留原始
+MSE+LPIPS，只把比较目标替换为 $D(Q(E(s')))$。为避免校准方向牺牲 raw fidelity，我们在同一
+candidates 上构造 raw 与 RC 的 group-relative surrogates，并把 RC gradient 投影到至少保持 raw
+surrogate 一阶进度的半空间。在 temporal-credit 一侧，第 $t$ 个 future-frame token block 获得从
+$t$ 到 rollout 末端的 discounted frame rewards，并只在相同时间位置的候选组内标准化。
 
-当前证据支持两项贡献。第一，我们建立了从 reachable-target mismatch、相关性预测的排序翻转、同候选 RC 重评分到 paired training 改善的诊断—修复闭环。第二，我们提出 frame-block temporal-return GRPO：在当前 5-seed RT-1 multi-step protocol 下，其 full-reference fidelity 均值优于 sequence-level RC，frame-only 对照显著退化，且相对收益随 rollout horizon 增长。我们同时报告边界：额外 reward components、通用 GRPO 替换和 horizon-aware KL 未产生稳定增益，motion 与 distributional realism 也不支持全面改善。固定 $n=10$ 扩种、完整 verifier×credit 因子对照和 rank-reliable return 门控用于决定最终投稿版本的主张强度。
+本文有两项贡献。第一，我们把冻结 codec 的 target-set mismatch 识别并验证为 GRPO 的 candidate-
+ranking failure，提出由可达性审计、RC verifier 和 raw-anchored update 组成的可达性约束排序校准
+框架。CNN-FSQ、压缩 FSQ 与 NVIDIA Cosmos DV-FSQ 三个独立 codec 实例上，encode–decode 重建误差均不可忽略；RT-1 与 VP2-RoboSuite 的 same-candidate audits 又在不同 tokenizer 和生成架构上显示
+rank agreement 提高、pairwise flips 减少。Cosmos 只用于独立 codec 重建误差审计，不被写成候选
+排序实验；跨平台 raw-GT training conversion 仍作为明确边界。第二，我们提出 future-frame
+token-block Temporal Return，把后续帧质量分配给
+能够影响它的前序 visual blocks。正式 RT-1 `low_var_kl` 协议中，该方法相对 sequence-level RC
+在训练未见的 8 episodes / 32 windows 上取得五个 fidelity metrics 的更好均值，其中 MSE 为 5/5
+paired seeds 改善，LPIPS、LPIPS-last、PSNR 和 SSIM 为 4/5。现有 paired $t$ tests 尚未达到双侧
+0.05，本文不声称全面改善 motion、diversity 或 distributional realism。
 
-## 当前贡献句
+## Claim Boundary
 
-1. **Verifier diagnosis and calibration.** 我们识别 tokenized video RLVR 中由不可达 raw target 引起的 candidate-dependent rank corruption，并用最小 RC verifier 完成机制与训练闭环。
-2. **Video-structured temporal credit.** 我们将 GRPO 的 sequence-level advantage 重构为 frame-block temporal returns，并通过 frame-only、gain、KL 和 horizon 分析隔离有效结构。
-
-## C3 通过后的替换句
-
-只有 Rank-Reliable Return 通过预注册门控和训练后，才把第二条升级为：
-
-> We introduce rank-reliable temporal credit assignment, which weights future-frame returns by horizon-wise verifier reliability measured from pairwise rank corruption, unifying reconstruction calibration and temporal credit under a single ranking principle.
-
-## 边界
-
-- 不声称 reward-to-go 本身是新理论；新颖性必须来自 tokenized video frame blocks、verifier reliability 和实证闭环；
-- 不声称全面改善 motion/diversity/distribution；
-- 不把负结果数量写成贡献；
-- 不在 C3 验证前修改 tex 的标题和 contribution list。
+- C1 的跨平台证据目前是 rank mechanism，不是跨平台 raw-pixel performance gain；
+- C2 当前为 episode-disjoint、跨五指标的方向证据，最强读数是 MSE 5/5；
+- 主文优先报告正式 `low_var_kl`；旧 linear-KL 可作为附录或敏感性，协议标签须清楚；
+- 不声称统计超加和，除非新的交互检验明确支持；
+- 所有最终指标相对 raw future frames，不能用 RC target 自评。
